@@ -1,0 +1,11 @@
+environment            = "prod"
+aws_region             = "us-east-1"
+vpc_cidr               = "10.0.0.0/16"
+az_count               = 3
+db_instance_class      = "db.t3.small"
+db_allocated_storage   = 100
+db_backup_retention    = 30
+db_multi_az            = true
+ecs_desired_count      = 5
+ecs_min_capacity       = 5
+ecs_max_capacity       = 20
