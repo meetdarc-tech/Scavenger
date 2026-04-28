@@ -76,3 +76,6 @@ Thumbs.db
 # Demo accounts (sensitive)
 demo/demo-accounts.json
 demo/*-secret.txt
+
+*storybook.log
+storybook-static
