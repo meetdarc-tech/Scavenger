@@ -19,7 +19,12 @@ import {
   ShoppingBag,
   Award,
   BookOpen,
+  Leaf,
+  Navigation,
+  Mail,
+  QrCode,
 } from 'lucide-react'
+import { cn } from '@/lib/cn'
 import { useWallet } from '@/context/WalletContext'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/Button'
@@ -93,6 +98,30 @@ const NAV_LINKS = [
     href: '/recycling-guide',
     roles: ['Recycler', 'Collector', 'Manufacturer'],
     icon: BookOpen
+  },
+  {
+    label: 'Impact',
+    href: '/impact',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: Leaf
+  },
+  {
+    label: 'Route Planner',
+    href: '/route-planner',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: Navigation
+  },
+  {
+    label: 'Messages',
+    href: '/messages',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: Mail
+  },
+  {
+    label: 'QR Scanner',
+    href: '/qr-scanner',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: QrCode
   }
 ]
 
