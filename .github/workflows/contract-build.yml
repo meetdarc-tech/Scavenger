@@ -1,0 +1,52 @@
+name: Contract Build
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'stellar-contract/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'stellar-contract/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+jobs:
+  build-contract:
+    name: Build Contract (WASM)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            stellar-contract/target/
+          key: ${{ runner.os }}-contract-build-${{ hashFiles('stellar-contract/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-contract-build-
+
+      - name: Build WASM
+        working-directory: stellar-contract
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-wasm
+          path: stellar-contract/target/wasm32-unknown-unknown/release/*.wasm
+          retention-days: 7
