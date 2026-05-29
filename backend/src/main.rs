@@ -6,10 +6,32 @@ use services::{
     ReportService, ReportingService, StorageService, S3StorageService,
 };
 use std::sync::Arc;
+use tracing::info;
+use tracing_subscriber::{fmt, EnvFilter, prelude::*};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+    // Structured JSON logging: LOG_FORMAT=json for production, pretty for dev
+    let use_json = std::env::var("LOG_FORMAT")
+        .map(|v| v.to_lowercase() == "json")
+        .unwrap_or(false);
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    if use_json {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer().json().with_current_span(true))
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer().pretty())
+            .init();
+    }
+
+    info!(service = "backend", "Starting Scavenger Backend Server on 0.0.0.0:8080");
 
     let email_service = Arc::new(SendGridEmailService::new(
         std::env::var("SENDGRID_API_KEY").unwrap_or_default(),
@@ -28,8 +50,6 @@ async fn main() -> std::io::Result<()> {
         std::env::var("S3_BUCKET").unwrap_or_default(),
         std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
     ));
-
-    println!("Starting Scavenger Backend Server on 0.0.0.0:8080");
 
     HttpServer::new(move || {
         App::new()

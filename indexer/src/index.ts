@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { runMigrations } from './db/migrate';
 import { runIndexer } from './indexer';
+import { logger } from './utils/logger';
 
 async function main() {
   const rpcUrl = process.env.STELLAR_RPC_URL;
@@ -9,6 +10,8 @@ async function main() {
   if (!rpcUrl || !contractId) {
     throw new Error('STELLAR_RPC_URL and CONTRACT_ID must be set');
   }
+
+  logger.info('Starting Scavngr indexer', { rpcUrl, contractId });
 
   await runMigrations();
 
@@ -23,6 +26,6 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error(err);
+  logger.error('Fatal error', { error: String(err) });
   process.exit(1);
 });
