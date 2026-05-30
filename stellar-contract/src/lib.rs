@@ -9,6 +9,7 @@ mod types;
 mod validation;
 mod verification;
 mod upgrade;
+mod explorer;
 
 pub use errors::Error;
 pub use types::{
@@ -22,6 +23,7 @@ pub use types::{
 pub use types::calculate_carbon_credits;
 pub use verification::{VerificationRecord, VerificationState, VerificationWorkflow};
 pub use upgrade::{UpgradeProposal, UpgradeStatus, ProxyState, UpgradeHistory};
+pub use explorer::{TransactionTracker, TransactionType, TransactionStatus, ExplorerConfig};
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Symbol, Vec,
@@ -70,6 +72,10 @@ const VERIFICATION_TIMEOUT: u64 = 7 * 24 * 60 * 60; // 7 days
 const UPGRADE_PROPOSAL_CNT: Symbol = symbol_short!("UPG_CNT");
 const PROXY_STATE: Symbol = symbol_short!("PROXY");
 const UPGRADE_HISTORY: Symbol = symbol_short!("UPG_HIST");
+
+// Explorer integration (issue #651)
+const TRANSACTION_CNT: Symbol = symbol_short!("TX_CNT");
+const EXPLORER_CONFIG: Symbol = symbol_short!("EXP_CFG");
 
 // Reputation delta constants
 const REP_TRANSFER: i128 = 5;
@@ -7072,5 +7078,163 @@ impl ScavengerContract {
         env.storage()
             .instance()
             .get(&("upgrade_history", version))
+    }
+
+    // ============ Blockchain Explorer Integration (Issue #651) ============
+
+    /// Initializes explorer configuration
+    pub fn init_explorer_config(
+        env: Env,
+        base_url: String,
+        network: String,
+    ) -> explorer::ExplorerConfig {
+        Self::require_admin(&env);
+
+        let contract_address = env.current_contract_address();
+
+        let config = explorer::ExplorerConfig::new(&env, base_url, network, contract_address);
+
+        env.storage().instance().set(&EXPLORER_CONFIG, &config);
+
+        config
+    }
+
+    /// Tracks a transaction on the blockchain
+    pub fn track_transaction(
+        env: Env,
+        tx_hash: String,
+        tx_type: explorer::TransactionType,
+        initiator: Address,
+        details: String,
+    ) -> explorer::TransactionTracker {
+        let tx_id: u64 = env
+            .storage()
+            .instance()
+            .get(&TRANSACTION_CNT)
+            .unwrap_or(0);
+
+        let mut tracker = explorer::TransactionTracker::new(
+            &env,
+            tx_id,
+            tx_hash,
+            tx_type,
+            initiator,
+            details,
+        );
+
+        // Store transaction tracker
+        env.storage()
+            .instance()
+            .set(&("transaction", tx_id), &tracker);
+
+        // Update counter
+        env.storage()
+            .instance()
+            .set(&TRANSACTION_CNT, &(tx_id + 1));
+
+        // Emit event
+        events::emit_transaction_tracked(&env, tx_id, &tracker.tx_hash);
+
+        tracker
+    }
+
+    /// Updates transaction status
+    pub fn update_transaction_status(
+        env: Env,
+        tx_id: u64,
+        status: explorer::TransactionStatus,
+    ) -> explorer::TransactionTracker {
+        let mut tracker: explorer::TransactionTracker = env
+            .storage()
+            .instance()
+            .get(&("transaction", tx_id))
+            .expect("Transaction not found");
+
+        match status {
+            explorer::TransactionStatus::Confirmed => tracker.confirm(),
+            explorer::TransactionStatus::Failed => tracker.fail(),
+            explorer::TransactionStatus::Reverted => tracker.revert(),
+            _ => {}
+        }
+
+        env.storage()
+            .instance()
+            .set(&("transaction", tx_id), &tracker);
+
+        events::emit_transaction_status_updated(&env, tx_id, status);
+
+        tracker
+    }
+
+    /// Gets a transaction tracker by ID
+    pub fn get_transaction(env: Env, tx_id: u64) -> Option<explorer::TransactionTracker> {
+        env.storage()
+            .instance()
+            .get(&("transaction", tx_id))
+    }
+
+    /// Gets all transactions for a participant
+    pub fn get_participant_transactions(env: Env, participant: Address) -> Vec<u64> {
+        let mut result = Vec::new(&env);
+        let tx_count: u64 = env
+            .storage()
+            .instance()
+            .get(&TRANSACTION_CNT)
+            .unwrap_or(0);
+
+        for id in 0..tx_count {
+            if let Some(tracker) = env
+                .storage()
+                .instance()
+                .get::<_, explorer::TransactionTracker>(&("transaction", id))
+            {
+                if tracker.initiator == participant {
+                    result.push_back(id);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Gets all transactions for a waste item
+    pub fn get_waste_transactions(env: Env, waste_id: u128) -> Vec<u64> {
+        let mut result = Vec::new(&env);
+        let tx_count: u64 = env
+            .storage()
+            .instance()
+            .get(&TRANSACTION_CNT)
+            .unwrap_or(0);
+
+        for id in 0..tx_count {
+            if let Some(tracker) = env
+                .storage()
+                .instance()
+                .get::<_, explorer::TransactionTracker>(&("transaction", id))
+            {
+                if let Some(w_id) = tracker.waste_id {
+                    if w_id == waste_id {
+                        result.push_back(id);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Gets explorer configuration
+    pub fn get_explorer_config(env: Env) -> Option<explorer::ExplorerConfig> {
+        env.storage().instance().get(&EXPLORER_CONFIG)
+    }
+
+    /// Gets transaction explorer link
+    pub fn get_transaction_explorer_link(env: Env, tx_id: u64) -> Option<String> {
+        let tracker: explorer::TransactionTracker = env
+            .storage()
+            .instance()
+            .get(&("transaction", tx_id))?;
+
+        Some(tracker.explorer_link)
     }
 }

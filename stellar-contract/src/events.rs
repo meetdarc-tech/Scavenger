@@ -310,3 +310,19 @@ pub fn emit_upgrade_rejected(env: &Env, proposal_id: u64) {
     env.events()
         .publish((symbol_short!("upg_rej"), proposal_id), ());
 }
+
+// ============ Blockchain Explorer Events (Issue #651) ============
+
+pub fn emit_transaction_tracked(env: &Env, tx_id: u64, tx_hash: &String) {
+    env.events()
+        .publish((symbol_short!("tx_track"), tx_id), tx_hash);
+}
+
+pub fn emit_transaction_status_updated(
+    env: &Env,
+    tx_id: u64,
+    status: crate::explorer::TransactionStatus,
+) {
+    env.events()
+        .publish((symbol_short!("tx_stat"), tx_id), status.to_u32());
+}
