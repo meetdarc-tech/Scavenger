@@ -288,3 +288,25 @@ pub fn emit_verification_expired(env: &Env, waste_id: u128, verification_id: u64
     env.events()
         .publish((symbol_short!("ver_exp"), verification_id), waste_id);
 }
+
+// ============ Upgrade System Events (Issue #652) ============
+
+pub fn emit_upgrade_proposed(env: &Env, proposal_id: u64, new_implementation: &Address) {
+    env.events()
+        .publish((symbol_short!("upg_prop"), proposal_id), new_implementation);
+}
+
+pub fn emit_upgrade_approved(env: &Env, proposal_id: u64) {
+    env.events()
+        .publish((symbol_short!("upg_app"), proposal_id), ());
+}
+
+pub fn emit_upgrade_executed(env: &Env, proposal_id: u64, version: u32) {
+    env.events()
+        .publish((symbol_short!("upg_exec"), proposal_id), version);
+}
+
+pub fn emit_upgrade_rejected(env: &Env, proposal_id: u64) {
+    env.events()
+        .publish((symbol_short!("upg_rej"), proposal_id), ());
+}

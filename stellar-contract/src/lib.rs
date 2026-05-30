@@ -8,6 +8,7 @@ mod test_transfer_path_validation;
 mod types;
 mod validation;
 mod verification;
+mod upgrade;
 
 pub use errors::Error;
 pub use types::{
@@ -20,6 +21,7 @@ pub use types::{
 };
 pub use types::calculate_carbon_credits;
 pub use verification::{VerificationRecord, VerificationState, VerificationWorkflow};
+pub use upgrade::{UpgradeProposal, UpgradeStatus, ProxyState, UpgradeHistory};
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Symbol, Vec,
@@ -63,6 +65,11 @@ const ROUTE_CNT: Symbol = symbol_short!("ROUTE_CNT");
 // Verification system (issue #653)
 const VERIFICATION_CNT: Symbol = symbol_short!("VER_CNT");
 const VERIFICATION_TIMEOUT: u64 = 7 * 24 * 60 * 60; // 7 days
+
+// Upgrade system (issue #652)
+const UPGRADE_PROPOSAL_CNT: Symbol = symbol_short!("UPG_CNT");
+const PROXY_STATE: Symbol = symbol_short!("PROXY");
+const UPGRADE_HISTORY: Symbol = symbol_short!("UPG_HIST");
 
 // Reputation delta constants
 const REP_TRANSFER: i128 = 5;
@@ -6877,5 +6884,193 @@ impl ScavengerContract {
         }
 
         result
+    }
+
+    // ============ Upgrade System Functions (Issue #652) ============
+
+    /// Proposes a contract upgrade
+    pub fn propose_upgrade(
+        env: Env,
+        new_implementation: Address,
+        description: String,
+    ) -> UpgradeProposal {
+        Self::require_admin(&env);
+
+        let proposal_id: u64 = env
+            .storage()
+            .instance()
+            .get(&UPGRADE_PROPOSAL_CNT)
+            .unwrap_or(0);
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMINS)
+            .expect("Admin not set");
+
+        let proxy_state: upgrade::ProxyState = env
+            .storage()
+            .instance()
+            .get(&PROXY_STATE)
+            .expect("Proxy state not initialized");
+
+        let proposal = UpgradeProposal::new(
+            &env,
+            proposal_id,
+            new_implementation,
+            description,
+            admin.clone(),
+            proxy_state.version + 1,
+        );
+
+        // Store proposal
+        env.storage()
+            .instance()
+            .set(&("upgrade_proposal", proposal_id), &proposal);
+
+        // Update counter
+        env.storage()
+            .instance()
+            .set(&UPGRADE_PROPOSAL_CNT, &(proposal_id + 1));
+
+        // Emit event
+        events::emit_upgrade_proposed(&env, proposal_id, &proposal.new_implementation);
+
+        proposal
+    }
+
+    /// Approves an upgrade proposal
+    pub fn approve_upgrade(env: Env, proposal_id: u64) -> UpgradeProposal {
+        Self::require_admin(&env);
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMINS)
+            .expect("Admin not set");
+
+        let mut proposal: UpgradeProposal = env
+            .storage()
+            .instance()
+            .get(&("upgrade_proposal", proposal_id))
+            .expect("Upgrade proposal not found");
+
+        proposal
+            .approve(&env, admin.clone())
+            .expect("Failed to approve upgrade");
+
+        // Store updated proposal
+        env.storage()
+            .instance()
+            .set(&("upgrade_proposal", proposal_id), &proposal);
+
+        // Emit event
+        events::emit_upgrade_approved(&env, proposal_id);
+
+        proposal
+    }
+
+    /// Executes an approved upgrade
+    pub fn execute_upgrade(env: Env, proposal_id: u64) -> UpgradeProposal {
+        Self::require_admin(&env);
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMINS)
+            .expect("Admin not set");
+
+        let mut proposal: UpgradeProposal = env
+            .storage()
+            .instance()
+            .get(&("upgrade_proposal", proposal_id))
+            .expect("Upgrade proposal not found");
+
+        proposal
+            .execute(&env)
+            .expect("Failed to execute upgrade");
+
+        // Get current proxy state
+        let mut proxy_state: upgrade::ProxyState = env
+            .storage()
+            .instance()
+            .get(&PROXY_STATE)
+            .expect("Proxy state not initialized");
+
+        let previous_implementation = proxy_state.current_implementation.clone();
+
+        // Update proxy state
+        proxy_state
+            .update_implementation(&env, proposal.new_implementation.clone(), proposal.version)
+            .expect("Failed to update implementation");
+
+        env.storage()
+            .instance()
+            .set(&PROXY_STATE, &proxy_state);
+
+        // Record upgrade history
+        let history = upgrade::UpgradeHistory::new(
+            &env,
+            proposal.version,
+            previous_implementation,
+            proposal.new_implementation.clone(),
+            admin,
+        );
+
+        env.storage()
+            .instance()
+            .set(&("upgrade_history", proposal.version), &history);
+
+        // Store updated proposal
+        env.storage()
+            .instance()
+            .set(&("upgrade_proposal", proposal_id), &proposal);
+
+        // Emit event
+        events::emit_upgrade_executed(&env, proposal_id, proposal.version);
+
+        proposal
+    }
+
+    /// Rejects an upgrade proposal
+    pub fn reject_upgrade(env: Env, proposal_id: u64) -> UpgradeProposal {
+        Self::require_admin(&env);
+
+        let mut proposal: UpgradeProposal = env
+            .storage()
+            .instance()
+            .get(&("upgrade_proposal", proposal_id))
+            .expect("Upgrade proposal not found");
+
+        proposal.reject().expect("Failed to reject upgrade");
+
+        // Store updated proposal
+        env.storage()
+            .instance()
+            .set(&("upgrade_proposal", proposal_id), &proposal);
+
+        // Emit event
+        events::emit_upgrade_rejected(&env, proposal_id);
+
+        proposal
+    }
+
+    /// Gets an upgrade proposal
+    pub fn get_upgrade_proposal(env: Env, proposal_id: u64) -> Option<UpgradeProposal> {
+        env.storage()
+            .instance()
+            .get(&("upgrade_proposal", proposal_id))
+    }
+
+    /// Gets the current proxy state
+    pub fn get_proxy_state(env: Env) -> Option<upgrade::ProxyState> {
+        env.storage().instance().get(&PROXY_STATE)
+    }
+
+    /// Gets upgrade history for a version
+    pub fn get_upgrade_history(env: Env, version: u32) -> Option<upgrade::UpgradeHistory> {
+        env.storage()
+            .instance()
+            .get(&("upgrade_history", version))
     }
 }
