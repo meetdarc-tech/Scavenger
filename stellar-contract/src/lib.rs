@@ -10,12 +10,13 @@ mod validation;
 
 pub use errors::Error;
 pub use types::{
-    Auction, CarbonListing, CertificationLevel, Challenge, ChallengeProgress, ChallengeStatus,
-    CollectionRoute, ContaminationReport, Dispute, DisputeStatus, GlobalMetrics, GradeRecord,
-    Incentive, LeaderboardEntry, Material, MaterialComposition, Milestone, OptionalWasteType,
-    ParticipantRole, PendingTransfer, PendingTransferStatus, ProcessingRecord, ProcessingStatus,
-    RecyclingGoal, RecyclingStats, ReputationBadge, RouteStatus, SeasonalMultiplier,
-    TransferItemType, TransferRecord, TransferStatus, Waste, WasteGrade, WasteTransfer, WasteType,
+    Auction, BatchStatus, CarbonListing, CertificationLevel, Challenge, ChallengeProgress,
+    ChallengeStatus, CollectionRoute, ContaminationReport, Dispute, DisputeStatus, GlobalMetrics,
+    GradeRecord, Incentive, LeaderboardEntry, LocationRecord, Material, MaterialComposition,
+    Milestone, OptionalWasteType, ParticipantRole, PendingTransfer, PendingTransferStatus,
+    ProcessingRecord, ProcessingStatus, QualityScore, RecyclingGoal, RecyclingStats,
+    ReputationBadge, RouteStatus, SeasonalMultiplier, TransferItemType, TransferRecord,
+    TransferStatus, Waste, WasteBatch, WasteCertification, WasteGrade, WasteTransfer, WasteType,
 };
 pub use types::calculate_carbon_credits;
 
@@ -57,6 +58,19 @@ const DISPUTE_CNT: Symbol = symbol_short!("DISP_CNT");
 
 // Collection route counters (issue #552)
 const ROUTE_CNT: Symbol = symbol_short!("ROUTE_CNT");
+
+// Issue #654: Quality Scoring storage keys
+const QUALITY_SCORES: Symbol = symbol_short!("QUAL_SC");
+
+// Issue #655: Location Tracking storage keys
+const LOCATION_HISTORY: Symbol = symbol_short!("LOC_HIST");
+
+// Issue #656: Batch Tracking storage keys
+const BATCH_COUNT: Symbol = symbol_short!("BATCH_CNT");
+const BATCH_INDEX: Symbol = symbol_short!("BATCH_IDX");
+
+// Issue #657: Certification storage keys
+const CERTIFICATIONS: Symbol = symbol_short!("CERT_IDX");
 
 // Reputation delta constants
 const REP_TRANSFER: i128 = 5;
@@ -6669,5 +6683,296 @@ impl ScavengerContract {
             }
         }
         result
+    }
+
+    // ========================================================================
+    // Issue #654: Waste Quality Scoring Functions
+    // ========================================================================
+
+    /// Calculate and store quality score for a waste item
+    pub fn calculate_quality_score(
+        env: Env,
+        waste_id: u128,
+        scorer: Address,
+    ) -> Result<QualityScore, Error> {
+        scorer.require_auth();
+
+        // Get waste item
+        let waste: Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        // Calculate score based on waste properties (0-100)
+        let mut score: u32 = 50; // Base score
+
+        // Add points for grade
+        score += match waste.grade {
+            WasteGrade::A => 40,
+            WasteGrade::B => 25,
+            WasteGrade::C => 10,
+            WasteGrade::D => 0,
+        };
+
+        // Subtract points for contamination
+        if waste.is_contaminated {
+            score = score.saturating_sub(waste.contamination_level as u32);
+        }
+
+        // Cap at 100
+        score = score.min(100);
+
+        let quality_score = QualityScore::new(score, env.ledger().timestamp(), scorer);
+
+        // Store quality score
+        env.storage()
+            .instance()
+            .set(&(QUALITY_SCORES, waste_id), &quality_score);
+
+        Ok(quality_score)
+    }
+
+    /// Get quality score for a waste item
+    pub fn get_quality_score(env: Env, waste_id: u128) -> Option<QualityScore> {
+        env.storage()
+            .instance()
+            .get(&(QUALITY_SCORES, waste_id))
+    }
+
+    /// Get quality-based waste filtering (returns waste IDs with score >= min_score)
+    pub fn get_wastes_by_quality(env: Env, min_score: u32) -> Vec<u128> {
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&("waste_count",))
+            .unwrap_or(0);
+
+        let mut result = Vec::new(&env);
+        for id in 1u128..=(count as u128) {
+            if let Some(score) = env
+                .storage()
+                .instance()
+                .get::<_, QualityScore>(&(QUALITY_SCORES, id))
+            {
+                if score.score >= min_score {
+                    result.push_back(id);
+                }
+            }
+        }
+        result
+    }
+
+    // ========================================================================
+    // Issue #655: Waste Location Tracking Functions
+    // ========================================================================
+
+    /// Update waste location and track history
+    pub fn update_waste_location(
+        env: Env,
+        waste_id: u128,
+        latitude: i128,
+        longitude: i128,
+        updater: Address,
+    ) -> Result<(), Error> {
+        updater.require_auth();
+
+        // Validate coordinates
+        if latitude < -90_000_000 || latitude > 90_000_000 {
+            return Err(Error::InvalidCoordinates);
+        }
+        if longitude < -180_000_000 || longitude > 180_000_000 {
+            return Err(Error::InvalidCoordinates);
+        }
+
+        // Get and update waste
+        let mut waste: Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        waste.latitude = latitude;
+        waste.longitude = longitude;
+
+        // Store updated waste
+        env.storage()
+            .instance()
+            .set(&("waste_v2", waste_id), &waste);
+
+        // Record location history
+        let location = LocationRecord::new(latitude, longitude, env.ledger().timestamp(), updater);
+
+        let mut history: Vec<LocationRecord> = env
+            .storage()
+            .instance()
+            .get(&(LOCATION_HISTORY, waste_id))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        history.push_back(location);
+        env.storage()
+            .instance()
+            .set(&(LOCATION_HISTORY, waste_id), &history);
+
+        Ok(())
+    }
+
+    /// Get location history for a waste item
+    pub fn get_location_history(env: Env, waste_id: u128) -> Vec<LocationRecord> {
+        env.storage()
+            .instance()
+            .get(&(LOCATION_HISTORY, waste_id))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    // ========================================================================
+    // Issue #656: Waste Batch Tracking Functions
+    // ========================================================================
+
+    /// Create a new waste batch
+    pub fn create_waste_batch(env: Env, creator: Address) -> Result<u64, Error> {
+        creator.require_auth();
+
+        let batch_count: u64 = env
+            .storage()
+            .instance()
+            .get(&BATCH_COUNT)
+            .unwrap_or(0);
+
+        let batch_id = batch_count + 1;
+        let batch = WasteBatch::new(batch_id, creator, env.ledger().timestamp(), &env);
+
+        env.storage()
+            .instance()
+            .set(&(BATCH_INDEX, batch_id), &batch);
+        env.storage().instance().set(&BATCH_COUNT, &batch_id);
+
+        Ok(batch_id)
+    }
+
+    /// Add waste to a batch
+    pub fn add_waste_to_batch(
+        env: Env,
+        batch_id: u64,
+        waste_id: u128,
+        adder: Address,
+    ) -> Result<(), Error> {
+        adder.require_auth();
+
+        let mut batch: WasteBatch = env
+            .storage()
+            .instance()
+            .get(&(BATCH_INDEX, batch_id))
+            .ok_or(Error::InvalidAmount)?;
+
+        // Only allow adding to pending batches
+        if batch.status != BatchStatus::Pending {
+            return Err(Error::InvalidAmount);
+        }
+
+        // Get waste to verify it exists and get weight
+        let waste: Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        batch.add_waste(waste_id, waste.weight);
+
+        env.storage()
+            .instance()
+            .set(&(BATCH_INDEX, batch_id), &batch);
+
+        Ok(())
+    }
+
+    /// Get batch details
+    pub fn get_batch(env: Env, batch_id: u64) -> Option<WasteBatch> {
+        env.storage()
+            .instance()
+            .get(&(BATCH_INDEX, batch_id))
+    }
+
+    /// Mark batch as ready
+    pub fn mark_batch_ready(env: Env, batch_id: u64, marker: Address) -> Result<(), Error> {
+        marker.require_auth();
+
+        let mut batch: WasteBatch = env
+            .storage()
+            .instance()
+            .get(&(BATCH_INDEX, batch_id))
+            .ok_or(Error::InvalidAmount)?;
+
+        if batch.created_by != marker {
+            return Err(Error::Unauthorized);
+        }
+
+        batch.mark_ready();
+        env.storage()
+            .instance()
+            .set(&(BATCH_INDEX, batch_id), &batch);
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Issue #657: Waste Certification Functions
+    // ========================================================================
+
+    /// Certify a waste item
+    pub fn certify_waste(
+        env: Env,
+        waste_id: u128,
+        level: u32,
+        certifier: Address,
+        expires_at: u64,
+        notes: String,
+    ) -> Result<(), Error> {
+        certifier.require_auth();
+
+        // Validate waste exists
+        let _waste: Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        // Validate certification level
+        let cert_level = CertificationLevel::from_u32(level).ok_or(Error::InvalidAmount)?;
+
+        let certification = WasteCertification::new(
+            waste_id,
+            cert_level,
+            certifier,
+            env.ledger().timestamp(),
+            expires_at,
+            notes,
+        );
+
+        env.storage()
+            .instance()
+            .set(&(CERTIFICATIONS, waste_id), &certification);
+
+        Ok(())
+    }
+
+    /// Get waste certification
+    pub fn get_waste_certification(env: Env, waste_id: u128) -> Option<WasteCertification> {
+        env.storage()
+            .instance()
+            .get(&(CERTIFICATIONS, waste_id))
+    }
+
+    /// Check if waste is certified and valid
+    pub fn is_waste_certified(env: Env, waste_id: u128) -> bool {
+        if let Some(cert) = env
+            .storage()
+            .instance()
+            .get::<_, WasteCertification>(&(CERTIFICATIONS, waste_id))
+        {
+            cert.is_valid(env.ledger().timestamp())
+        } else {
+            false
+        }
     }
 }
