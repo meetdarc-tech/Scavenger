@@ -256,3 +256,94 @@ pub fn emit_carbon_listing_purchased(
     env.events()
         .publish((symbol_short!("carb_buy"), listing_id), (seller, buyer, amount, total_price));
 }
+
+// ============ Verification Workflow Events (Issue #653) ============
+
+pub fn emit_verification_started(
+    env: &Env,
+    waste_id: u128,
+    verification_id: u64,
+    verifier: &Address,
+) {
+    env.events()
+        .publish((symbol_short!("ver_start"), verification_id), (waste_id, verifier));
+}
+
+pub fn emit_verification_completed(
+    env: &Env,
+    waste_id: u128,
+    verification_id: u64,
+    quality_score: u32,
+) {
+    env.events()
+        .publish((symbol_short!("ver_comp"), verification_id), (waste_id, quality_score));
+}
+
+pub fn emit_verification_failed(env: &Env, waste_id: u128, verification_id: u64) {
+    env.events()
+        .publish((symbol_short!("ver_fail"), verification_id), waste_id);
+}
+
+pub fn emit_verification_expired(env: &Env, waste_id: u128, verification_id: u64) {
+    env.events()
+        .publish((symbol_short!("ver_exp"), verification_id), waste_id);
+}
+
+// ============ Upgrade System Events (Issue #652) ============
+
+pub fn emit_upgrade_proposed(env: &Env, proposal_id: u64, new_implementation: &Address) {
+    env.events()
+        .publish((symbol_short!("upg_prop"), proposal_id), new_implementation);
+}
+
+pub fn emit_upgrade_approved(env: &Env, proposal_id: u64) {
+    env.events()
+        .publish((symbol_short!("upg_app"), proposal_id), ());
+}
+
+pub fn emit_upgrade_executed(env: &Env, proposal_id: u64, version: u32) {
+    env.events()
+        .publish((symbol_short!("upg_exec"), proposal_id), version);
+}
+
+pub fn emit_upgrade_rejected(env: &Env, proposal_id: u64) {
+    env.events()
+        .publish((symbol_short!("upg_rej"), proposal_id), ());
+}
+
+// ============ Blockchain Explorer Events (Issue #651) ============
+
+pub fn emit_transaction_tracked(env: &Env, tx_id: u64, tx_hash: &String) {
+    env.events()
+        .publish((symbol_short!("tx_track"), tx_id), tx_hash);
+}
+
+pub fn emit_transaction_status_updated(
+    env: &Env,
+    tx_id: u64,
+    status: crate::explorer::TransactionStatus,
+) {
+    env.events()
+        .publish((symbol_short!("tx_stat"), tx_id), status.to_u32());
+}
+
+// ============ Advanced Analytics Events (Issue #650) ============
+
+pub fn emit_analytics_report_created(
+    env: &Env,
+    report_id: u64,
+    report_type: crate::analytics::ReportType,
+) {
+    env.events()
+        .publish((symbol_short!("ana_rep"), report_id), report_type.to_u32());
+}
+
+pub fn emit_custom_query_created(env: &Env, query_id: u64) {
+    env.events()
+        .publish((symbol_short!("qry_cre"), query_id), ());
+}
+
+pub fn emit_custom_query_executed(env: &Env, query_id: u64) {
+    env.events()
+        .publish((symbol_short!("qry_exe"), query_id), ());
+}

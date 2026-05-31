@@ -7,6 +7,10 @@ mod test_grading;
 mod test_transfer_path_validation;
 mod types;
 mod validation;
+mod verification;
+mod upgrade;
+mod explorer;
+mod analytics;
 
 pub use errors::Error;
 pub use types::{
@@ -19,6 +23,10 @@ pub use types::{
     TransferStatus, Waste, WasteBatch, WasteCertification, WasteGrade, WasteTransfer, WasteType,
 };
 pub use types::calculate_carbon_credits;
+pub use verification::{VerificationRecord, VerificationState, VerificationWorkflow};
+pub use upgrade::{UpgradeProposal, UpgradeStatus, ProxyState, UpgradeHistory};
+pub use explorer::{TransactionTracker, TransactionType, TransactionStatus, ExplorerConfig};
+pub use analytics::{AnalyticsReport, ReportType, CustomQuery, AggregationType, AnalyticsDataPoint, AnalyticsEngine};
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Symbol, Vec,
