@@ -1,0 +1,62 @@
+name: Backend Build
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+jobs:
+  build-backend:
+    name: Build Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            backend/target/
+          key: ${{ runner.os }}-backend-build-${{ hashFiles('backend/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-backend-build-
+
+      - name: Format check
+        working-directory: backend
+        run: cargo fmt -- --check
+
+      - name: Clippy linting
+        working-directory: backend
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        working-directory: backend
+        run: cargo build --release
+
+      - name: Run tests
+        working-directory: backend
+        run: cargo test --release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-binary
+          path: backend/target/release/scavenger-backend
+          retention-days: 7
