@@ -531,6 +531,19 @@ impl WasteType {
         }
     }
 
+    /// Returns the impact score multiplier per gram for this waste type
+    pub fn impact_score_multiplier(&self) -> u128 {
+        match self {
+            WasteType::Paper => 10,
+            WasteType::PetPlastic => 30,
+            WasteType::Plastic => 25,
+            WasteType::Metal => 40,
+            WasteType::Glass => 15,
+            WasteType::Organic => 5,
+            WasteType::Electronic => 50,
+        }
+    }
+
     /// Checks if the waste type is recyclable plastic
     pub fn is_plastic(&self) -> bool {
         matches!(self, WasteType::PetPlastic | WasteType::Plastic)
@@ -571,6 +584,28 @@ pub struct Material {
     pub verified: bool,
     /// Optional description of the material
     pub description: String,
+}
+
+/// Environmental impact score for a waste item
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImpactScore {
+    /// Total impact score (based on waste type and weight)
+    pub score: u128,
+    /// Timestamp when score was calculated
+    pub calculated_at: u64,
+}
+
+/// History of impact scores for a participant
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImpactHistoryEntry {
+    /// Waste ID
+    pub waste_id: u128,
+    /// Impact score for this waste
+    pub score: u128,
+    /// Timestamp when the score was recorded
+    pub recorded_at: u64,
 }
 
 impl Material {
@@ -786,12 +821,16 @@ pub struct Waste {
     pub processing_status: ProcessingStatus,
     /// Processing history
     pub processing_history: soroban_sdk::Vec<ProcessingRecord>,
+    /// Substitution history
+    pub substitution_history: soroban_sdk::Vec<SubstitutionRecord>,
     /// Unique tracking code for QR codes
     pub tracking_code: soroban_sdk::String,
     /// Processing cost in tokens (set by owner)
     pub processing_cost: u128,
     /// Material composition breakdown (percentages summing to 100)
     pub composition: soroban_sdk::Vec<MaterialComposition>,
+    /// Environmental impact score for this waste item
+    pub impact_score: u128,
 }
 
 impl Waste {
@@ -821,6 +860,8 @@ impl Waste {
 
         let tracking_code = soroban_sdk::String::from_str(env, "WS-TRACK");
 
+        let impact_score = calculate_impact_score(waste_type, weight);
+
         Self {
             waste_id,
             waste_type,
@@ -845,9 +886,11 @@ impl Waste {
             contamination_reason: soroban_sdk::String::from_str(env, ""),
             processing_status: ProcessingStatus::Collected,
             processing_history: history,
+            substitution_history: soroban_sdk::Vec::new(env),
             tracking_code,
             processing_cost: 0,
             composition: soroban_sdk::Vec::new(env),
+            impact_score,
         }
     }
     pub fn is_expired(&self, now: u64) -> bool {
@@ -1004,6 +1047,105 @@ pub struct CarbonListing {
     pub created_at: u64,
 }
 
+/// Represents a period for compliance reporting
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportPeriod {
+    pub start_timestamp: u64,
+    pub end_timestamp: u64,
+}
+
+/// Status of regulatory validation
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComplianceStatus {
+    Pending = 0,
+    Compliant = 1,
+    NonCompliant = 2,
+    Exempt = 3,
+}
+
+/// Regulatory requirement validation result
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegulatoryValidation {
+    pub requirement_id: String,
+    pub status: ComplianceStatus,
+    pub notes: String,
+}
+
+/// Represents a compliance report for environmental regulations
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ComplianceReport {
+    pub id: u64,
+    pub period: ReportPeriod,
+    pub total_waste_tracked: u128,
+    pub waste_by_type: soroban_sdk::Vec<(WasteType, u128)>,
+    pub total_carbon_credits: u128,
+    pub validations: soroban_sdk::Vec<RegulatoryValidation>,
+    pub generated_at: u64,
+    pub version: u32,
+    pub is_finalized: bool,
+}
+
+/// Status of a multi-signature transfer approval
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransferApprovalStatus {
+    Pending = 0,
+    Approved = 1,
+    Rejected = 2,
+    Expired = 3,
+}
+
+/// Represents a multi-signature approval for high-value transfers
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferApproval {
+    pub waste_id: u128,
+    pub from: Address,
+    pub to: Address,
+    pub amount: u128,
+    pub approvers: soroban_sdk::Vec<Address>,
+    pub required_approvals: u32,
+    pub status: TransferApprovalStatus,
+    pub created_at: u64,
+    pub expires_at: u64,
+}
+
+/// Represents a substitution of one waste item for another
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubstitutionRecord {
+    pub original_id: u128,
+    pub substitute_id: u128,
+    pub approver: Address,
+    pub reason: String,
+    pub timestamp: u64,
+}
+
+/// Statistics for contract transactions
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransactionStats {
+    pub total_transactions: u64,
+    pub successful_transactions: u64,
+    pub failed_transactions: u64,
+    pub average_gas_usage: u64,
+    pub last_transaction_timestamp: u64,
+}
+
+/// A snapshot of contract performance at a point in time
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PerformanceSnapshot {
+    pub timestamp: u64,
+    pub active_users: u32,
+    pub waste_processed_per_hour: u128,
+    pub average_latency_ms: u32,
+}
+
 /// Transfer record for waste movement across the supply chain.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1152,6 +1294,7 @@ impl WasteBuilder {
             contamination_reason: soroban_sdk::String::from_str(env, ""),
             processing_status: ProcessingStatus::Collected,
             processing_history: history,
+            substitution_history: soroban_sdk::Vec::new(env),
             tracking_code: soroban_sdk::String::from_str(env, "WS-TRACK"),
             processing_cost: 0,
             composition: soroban_sdk::Vec::new(env),
@@ -1175,6 +1318,8 @@ pub struct RecyclingStats {
     pub total_points: u64,
     /// Total carbon credits earned (grams of CO2 equivalent)
     pub carbon_credits_earned: u128,
+    /// Total environmental impact score
+    pub total_impact_score: u128,
     /// Number of materials by waste type
     pub paper_count: u64,
     pub pet_plastic_count: u64,
@@ -1207,6 +1352,7 @@ impl RecyclingStats {
             total_weight: 0,
             total_points: 0,
             carbon_credits_earned: 0,
+            total_impact_score: 0,
             paper_count: 0,
             pet_plastic_count: 0,
             plastic_count: 0,
@@ -1322,6 +1468,12 @@ impl RecyclingStats {
 /// Formula: credits = weight_grams * rate_milli / 1000
 pub fn calculate_carbon_credits(waste_type: WasteType, weight_grams: u128) -> u128 {
     weight_grams * waste_type.carbon_credit_rate_milli() / 1000
+}
+
+/// Calculate environmental impact score for a given waste type and weight in grams.
+/// Formula: score = weight_grams * impact_score_multiplier
+pub fn calculate_impact_score(waste_type: WasteType, weight_grams: u128) -> u128 {
+    weight_grams * waste_type.impact_score_multiplier()
 }
 
 #[cfg(test)]
@@ -1931,6 +2083,45 @@ pub struct GlobalMetrics {
     pub total_tokens_earned: u128,
     /// Total carbon credits earned across all participants (grams CO2 equivalent)
     pub total_carbon_credits: u128,
+    /// Count of waste items per grade
+    pub grade_a_count: u64,
+    pub grade_b_count: u64,
+    pub grade_c_count: u64,
+    pub grade_d_count: u64,
+    /// Count of expired waste items
+    pub expired_waste_count: u64,
+    /// Count of active waste items
+    pub active_waste_count: u64,
+}
+
+/// A single entry in a composition analysis result
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompositionEntry {
+    pub material_type: WasteType,
+    pub avg_percentage: u32,
+}
+
+/// Records when a waste item is approaching its expiration time
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpirationWarning {
+    pub waste_id: u128,
+    pub expires_at: u64,
+    pub warning_type: soroban_sdk::Symbol,
+    pub warned_at: u64,
+}
+
+/// Records transfer path validation data
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferValidationRecord {
+    pub waste_id: u128,
+    pub from: Address,
+    pub to: Address,
+    pub valid: bool,
+    pub reason: soroban_sdk::String,
+    pub validated_at: u64,
 }
 
 /// Seasonal reward multiplier stored as basis points (100 = 1x, 150 = 1.5x, 500 = 5x max).
@@ -2091,6 +2282,47 @@ pub struct Dispute {
     pub created_at: u64,
     pub resolved_at: u64,
     pub resolution_note: soroban_sdk::String,
+}
+
+// ========== Participant Tier System (issue #696) ==========
+
+/// Participant tier based on total waste processed, reputation, and consistency.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParticipantTier {
+    /// Less than 100,000 grams processed
+    Bronze = 0,
+    /// 100,000 to 499,999 grams processed
+    Silver = 1,
+    /// 500,000 to 1,999,999 grams processed
+    Gold = 2,
+    /// 2,000,000+ grams processed
+    Platinum = 3,
+}
+
+impl ParticipantTier {
+    /// Calculates the participant tier based on total waste processed (in grams).
+    pub fn from_total_waste(total_waste: u128) -> Self {
+        if total_waste >= 2_000_000 {
+            ParticipantTier::Platinum
+        } else if total_waste >= 500_000 {
+            ParticipantTier::Gold
+        } else if total_waste >= 100_000 {
+            ParticipantTier::Silver
+        } else {
+            ParticipantTier::Bronze
+        }
+    }
+
+    /// Gets the reward multiplier for this tier (scaled by 100).
+    pub fn reward_multiplier(&self) -> u64 {
+        match self {
+            ParticipantTier::Bronze => 100,   // 1.0x
+            ParticipantTier::Silver => 110,   // 1.1x
+            ParticipantTier::Gold => 125,     // 1.25x
+            ParticipantTier::Platinum => 150, // 1.5x
+        }
+    }
 }
 
 // ========== Reputation System Types (issue #551) ==========

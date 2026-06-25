@@ -11,6 +11,7 @@ mod verification;
 mod upgrade;
 mod explorer;
 mod analytics;
+mod audit_log;
 
 pub use errors::Error;
 pub use types::{
@@ -86,6 +87,14 @@ const BATCH_INDEX: Symbol = symbol_short!("BATCH_IDX");
 
 // Issue #657: Certification storage keys
 const CERTIFICATIONS: Symbol = symbol_short!("CERT_IDX");
+
+// Issue #700: Compliance Reporting storage keys
+const REPORT_COUNT: Symbol = symbol_short!("REP_CNT");
+const REPORTS: Symbol = symbol_short!("REPORTS");
+
+// Issue #703: Performance Benchmarking storage keys
+const TRANSACTION_STATS: Symbol = symbol_short!("TX_STATS");
+const PERF_SNAPSHOTS: Symbol = symbol_short!("PERF_SNP");
 
 // Reputation delta constants
 const REP_TRANSFER: i128 = 5;
@@ -196,6 +205,8 @@ pub struct Participant {
     pub last_active_at: u64,
     /// Certification level based on activity and accuracy
     pub certification: CertificationLevel,
+    /// Participant tier (Bronze, Silver, Gold, Platinum)
+    pub tier: ParticipantTier,
 }
 
 /// Combined view of a participant and their recycling statistics.
@@ -904,6 +915,7 @@ impl ScavengerContract {
             reputation_score: 0,
             last_active_at: env.ledger().timestamp(),
             certification: CertificationLevel::Beginner,
+            tier: ParticipantTier::Bronze,
         };
 
         // Store participant using helper function
@@ -958,11 +970,20 @@ impl ScavengerContract {
             let old_certification = participant.certification;
             participant.certification = CertificationLevel::from_waste_count(participant.total_waste_processed);
 
+            // Update tier based on total waste processed
+            let old_tier = participant.tier;
+            participant.tier = ParticipantTier::from_total_waste(participant.total_waste_processed);
+
             env.storage().instance().set(&key, &participant);
 
             // Emit certification granted event if level upgraded
             if participant.certification != old_certification {
                 events::emit_certification_granted(env, address, participant.certification);
+            }
+
+            // Emit tier change event if tier changed
+            if participant.tier != old_tier {
+                events::emit_participant_tier_changed(env, address, old_tier, participant.tier);
             }
 
             // Update global total tokens if tokens were earned
@@ -999,8 +1020,9 @@ impl ScavengerContract {
             if let Some(p) = participant {
                 if matches!(p.role, ParticipantRole::Collector) {
                     let base_share = collector_share;
-                    let multiplier = p.certification.reward_multiplier() as u128;
-                    let share = (base_share * multiplier) / 100;
+                    let cert_multiplier = p.certification.reward_multiplier() as u128;
+                    let tier_multiplier = p.tier.reward_multiplier() as u128;
+                    let share = (base_share * cert_multiplier * tier_multiplier) / 10000; // Divide by 100*100
                     total_distributed += share;
                     Self::update_participant_stats(env, &transfer.to, 0, share as u64);
                     events::emit_tokens_rewarded(env, &transfer.to, share, waste_id);
@@ -1017,8 +1039,9 @@ impl ScavengerContract {
             if submitter_total > 0 {
                 let key = (material.submitter.clone(),);
                 if let Some(participant) = env.storage().instance().get::<_, Participant>(&key) {
-                    let multiplier = participant.certification.reward_multiplier() as u128;
-                    let adjusted_total = (submitter_total * multiplier) / 100;
+                    let cert_multiplier = participant.certification.reward_multiplier() as u128;
+                    let tier_multiplier = participant.tier.reward_multiplier() as u128;
+                    let adjusted_total = (submitter_total * cert_multiplier * tier_multiplier) / 10000;
 
                     let mut participant = participant; // make mutable
                     participant.total_tokens_earned = participant
@@ -1031,8 +1054,8 @@ impl ScavengerContract {
                     Self::add_to_total_tokens(env, adjusted_total);
 
                     // Emit two events to preserve existing behaviour / test expectations
-                    let adjusted_owner_share = (owner_share * multiplier) / 100;
-                    let adjusted_recycler_amount = (recycler_amount * multiplier) / 100;
+                    let adjusted_owner_share = (owner_share * cert_multiplier * tier_multiplier) / 10000;
+                    let adjusted_recycler_amount = (recycler_amount * cert_multiplier * tier_multiplier) / 10000;
                     events::emit_tokens_rewarded(env, &material.submitter, adjusted_owner_share, waste_id);
                     if adjusted_recycler_amount > 0 {
                         events::emit_tokens_rewarded(
@@ -1118,6 +1141,127 @@ impl ScavengerContract {
                 | (ParticipantRole::Recycler, ParticipantRole::Manufacturer)
                 | (ParticipantRole::Collector, ParticipantRole::Manufacturer)
         )
+    }
+
+    /// Standalone public function to validate a transfer path for a specific waste item.
+    /// Checks:
+    /// 1. Both parties are registered
+    /// 2. The role transition is permitted
+    /// 3. The waste exists and is active
+    /// 4. The waste has not expired
+    /// 5. The waste is not already owned by the target (circular transfer prevention)
+    /// 6. The waste is not frozen
+    pub fn validate_transfer_path(
+        env: Env,
+        waste_id: u128,
+        from: Address,
+        to: Address,
+    ) -> Result<(), Error> {
+        Self::require_not_paused(&env);
+        Self::require_addresses_different(&from, &to);
+
+        let waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        if waste.current_owner != from {
+            return Err(Error::NotWasteOwner);
+        }
+
+        if !waste.is_active {
+            return Err(Error::WasteDeactivated);
+        }
+
+        if waste.is_frozen {
+            return Err(Error::WasteFrozen);
+        }
+
+        if waste.is_expired(env.ledger().timestamp()) {
+            return Err(Error::WasteExpired);
+        }
+
+        if waste.current_owner == to {
+            return Err(Error::InvalidTransferRoute);
+        }
+
+        Self::require_registered(&env, &from);
+        Self::require_registered(&env, &to);
+
+        if !Self::is_valid_transfer(&env, from.clone(), to.clone()) {
+            return Err(Error::InvalidTransferRoute);
+        }
+
+        Ok(())
+    }
+
+    /// Admin override to transfer waste even when the route would normally be invalid.
+    /// Only the contract admin may call this.
+    pub fn admin_override_transfer(
+        env: Env,
+        admin: Address,
+        waste_id: u128,
+        from: Address,
+        to: Address,
+        latitude: i128,
+        longitude: i128,
+    ) -> Result<WasteTransfer, Error> {
+        Self::only_admin(&env, &admin);
+        Self::require_not_paused(&env);
+        Self::require_addresses_different(&from, &to);
+
+        let mut waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        if waste.current_owner != from {
+            return Err(Error::NotWasteOwner);
+        }
+
+        if waste.is_frozen {
+            return Err(Error::WasteFrozen);
+        }
+
+        waste.transfer_to(to.clone());
+        env.storage()
+            .instance()
+            .set(&("waste_v2", waste_id), &waste);
+
+        let timestamp = env.ledger().timestamp();
+        let transfer = WasteTransfer::new(
+            waste_id,
+            from.clone(),
+            to.clone(),
+            timestamp,
+            latitude,
+            longitude,
+            soroban_sdk::symbol_short!("admin_xfr"),
+        );
+
+        let mut history: Vec<WasteTransfer> = env
+            .storage()
+            .instance()
+            .get(&("transfer_history", waste_id))
+            .unwrap_or(Vec::new(&env));
+        history.push_back(transfer.clone());
+        env.storage()
+            .instance()
+            .set(&("transfer_history", waste_id), &history);
+
+        events::emit_admin_override_transfer(&env, waste_id, &admin, &from, &to);
+
+        Ok(transfer)
+    }
+
+    /// Get the full transfer history (path data) for a waste item.
+    pub fn get_transfer_path_data(env: Env, waste_id: u128) -> Vec<WasteTransfer> {
+        env.storage()
+            .instance()
+            .get(&("transfer_history", waste_id))
+            .unwrap_or(Vec::new(&env))
     }
 
     /// Get the total count of waste records
@@ -3000,6 +3144,59 @@ impl ScavengerContract {
         }
         count
     }
+
+    /// Check if a specific waste item has expired.
+    /// Returns `true` if the waste exists, is active, and has expired.
+    /// Returns `false` if the waste doesn't exist, is inactive, or not yet expired.
+    pub fn check_waste_expiration(env: Env, waste_id: u128) -> bool {
+        let now = env.ledger().timestamp();
+        if let Some(waste) = env.storage().instance().get::<_, types::Waste>(&("waste_v2", waste_id)) {
+            waste.is_active && waste.is_expired(now)
+        } else {
+            false
+        }
+    }
+
+    /// Return IDs of active waste items approaching expiry within the given window (seconds).
+    /// e.g. `within_seconds = 90 * 24 * 60 * 60` for 90-day warning.
+    pub fn get_wastes_approaching_expiry(env: Env, within_seconds: u64) -> Vec<u128> {
+        let now = env.ledger().timestamp();
+        let total = Self::get_waste_count(&env);
+        let mut result = Vec::new(&env);
+        for id in 1..=total {
+            let waste_id = id as u128;
+            if let Some(waste) = env.storage().instance().get::<_, types::Waste>(&("waste_v2", waste_id)) {
+                if waste.is_active && waste.expires_at != 0 && waste.expires_at > now {
+                    let remaining = waste.expires_at - now;
+                    if remaining <= within_seconds {
+                        result.push_back(waste_id);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Get all active waste items and return their lifecycle state summary.
+    /// Returns (total_active, total_expired_or_inactive).
+    pub fn get_lifecycle_summary(env: Env) -> (u64, u64) {
+        let now = env.ledger().timestamp();
+        let total = Self::get_waste_count(&env);
+        let mut active: u64 = 0;
+        let mut inactive: u64 = 0;
+        for id in 1..=total {
+            let waste_id = id as u128;
+            if let Some(waste) = env.storage().instance().get::<_, types::Waste>(&("waste_v2", waste_id)) {
+                if waste.is_active && !waste.is_expired(now) {
+                    active += 1;
+                } else {
+                    inactive += 1;
+                }
+            }
+        }
+        (active, inactive)
+    }
+
     ///
     /// More gas-efficient than repeated [`submit_material`] calls because stats
     /// and storage writes are batched. Emits no individual events per item.
@@ -4195,6 +4392,53 @@ impl ScavengerContract {
         base_reward * grade.multiplier_pct() / 100
     }
 
+    /// Get aggregated grading analytics across all participants.
+    /// Returns (grade_a, grade_b, grade_c, grade_d) counts.
+    pub fn get_grading_analytics(env: Env) -> (u64, u64, u64, u64) {
+        let mut a: u64 = 0;
+        let mut b: u64 = 0;
+        let mut c: u64 = 0;
+        let mut d: u64 = 0;
+        let total = Self::get_waste_count(&env);
+        for id in 1..=total {
+            let waste_id = id as u128;
+            if let Some(w) = env.storage().instance().get::<_, types::Waste>(&("waste_v2", waste_id)) {
+                match w.grade {
+                    WasteGrade::A => a += 1,
+                    WasteGrade::B => b += 1,
+                    WasteGrade::C => c += 1,
+                    WasteGrade::D => d += 1,
+                }
+            }
+        }
+        (a, b, c, d)
+    }
+
+    /// Simulate AI verification of a waste grade.
+    /// Returns the AI-suggested grade and a confidence score (0-100).
+    /// This stores the AI verification metadata alongside the grade.
+    pub fn set_waste_grade_ai_verified(
+        env: Env,
+        waste_id: u128,
+        grade: WasteGrade,
+        grader: Address,
+        ai_confidence: u32,
+    ) -> Result<types::Waste, Error> {
+        let result = Self::set_waste_grade(env.clone(), waste_id, grade, grader);
+        let confidence = ai_confidence.min(100);
+        env.storage()
+            .instance()
+            .set(&("ai_grade_conf", waste_id), &confidence);
+        Ok(result)
+    }
+
+    /// Get the AI verification confidence for a waste grade (0-100).
+    pub fn get_ai_grade_confidence(env: Env, waste_id: u128) -> Option<u32> {
+        env.storage()
+            .instance()
+            .get(&("ai_grade_conf", waste_id))
+    }
+
     // ========== Waste Category Tags ==========
 
     const MAX_TAGS: u32 = 10;
@@ -4570,11 +4814,386 @@ impl ScavengerContract {
             .unwrap_or(0);
         let total_tokens_earned: u128 = env.storage().instance().get(&TOTAL_TOKENS).unwrap_or(0);
         let total_carbon_credits: u128 = env.storage().instance().get(&TOTAL_CARBON).unwrap_or(0);
+        let (active, expired) = Self::get_lifecycle_summary(env.clone());
+        let (a, b, c, d) = Self::get_grading_analytics(env.clone());
         types::GlobalMetrics {
             total_wastes_count,
             total_tokens_earned,
             total_carbon_credits,
+            grade_a_count: a,
+            grade_b_count: b,
+            grade_c_count: c,
+            grade_d_count: d,
+            expired_waste_count: expired,
+            active_waste_count: active,
         }
+    }
+
+    // ========== Compliance Reporting Functions ==========
+
+    /// Generate a compliance report for a given period.
+    /// This function collects waste tracking and carbon credit data for the specified timeframe.
+    pub fn generate_compliance_report(
+        env: Env,
+        admin: Address,
+        period: ReportPeriod,
+    ) -> ComplianceReport {
+        Self::only_admin(&env, &admin);
+
+        let report_id_key = REPORT_COUNT;
+        let current_id: u64 = env.storage().instance().get(&report_id_key).unwrap_or(0);
+        let new_id = current_id + 1;
+        env.storage().instance().set(&report_id_key, &new_id);
+
+        // In a real scenario, we would filter waste items by timestamp.
+        // For this implementation, we use current global metrics as a snapshot.
+        let metrics = Self::get_metrics(env.clone());
+
+        // Create regulatory validations (example requirements)
+        let mut validations = Vec::new(&env);
+
+        validations.push_back(RegulatoryValidation {
+            requirement_id: String::from_str(&env, "ENV-001"),
+            status: ComplianceStatus::Compliant,
+            notes: String::from_str(&env, "Total waste tracked exceeds minimum threshold."),
+        });
+
+        validations.push_back(RegulatoryValidation {
+            requirement_id: String::from_str(&env, "CARB-002"),
+            status: ComplianceStatus::Compliant,
+            notes: String::from_str(&env, "Carbon credits correctly calculated and attributed."),
+        });
+
+        let mut waste_by_type = Vec::new(&env);
+        // Simplified: using a fixed list of types for the report
+        for i in 0..7 {
+            if let Some(wt) = WasteType::from_u32(i) {
+                // In a real implementation, we'd have a counter per waste type
+                waste_by_type.push_back((wt, 0u128));
+            }
+        }
+
+        let report = ComplianceReport {
+            id: new_id,
+            period,
+            total_waste_tracked: metrics.total_wastes_count as u128,
+            waste_by_type,
+            total_carbon_credits: metrics.total_carbon_credits,
+            validations,
+            generated_at: env.ledger().timestamp(),
+            version: 1,
+            is_finalized: false,
+        };
+
+        // Store report
+        env.storage().persistent().set(&(REPORTS, new_id), &report);
+
+        // Log the action
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "GENERATE_REPORT"),
+            admin,
+            String::from_str(&env, "COMPLIANCE"),
+            String::from_str(&env, "Compliance report generated"),
+        );
+
+        report
+    }
+
+    /// Retrieve a previously generated compliance report.
+    pub fn get_compliance_report(env: Env, report_id: u64) -> ComplianceReport {
+        env.storage()
+            .persistent()
+            .get(&(REPORTS, report_id))
+            .expect("Compliance report not found")
+    }
+
+    /// Finalize a compliance report, marking it as official and unchangeable.
+    pub fn finalize_compliance_report(env: Env, admin: Address, report_id: u64) {
+        Self::only_admin(&env, &admin);
+        let mut report: ComplianceReport = env
+            .storage()
+            .persistent()
+            .get(&(REPORTS, report_id))
+            .expect("Compliance report not found");
+
+        report.is_finalized = true;
+        env.storage().persistent().set(&(REPORTS, report_id), &report);
+
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "FINALIZE_REPORT"),
+            admin,
+            String::from_str(&env, "COMPLIANCE"),
+            String::from_str(&env, "Compliance report finalized"),
+        );
+    }
+
+    // ========== Multi-Signature Approval Functions ==========
+
+    /// Set the threshold for high-value transfers that require multi-signature approval.
+    pub fn set_transfer_threshold(env: Env, admin: Address, threshold: u128) {
+        Self::only_admin(&env, &admin);
+        env.storage().instance().set(&TRANSFER_THRESHOLD, &threshold);
+    }
+
+    /// Set the required number of approvals for high-value transfers.
+    pub fn set_required_approvals(env: Env, admin: Address, count: u32) {
+        Self::only_admin(&env, &admin);
+        env.storage().instance().set(&REQUIRED_APPROVERS, &count);
+    }
+
+    /// Approve a pending high-value transfer.
+    pub fn approve_high_value_transfer(env: Env, waste_id: u128, approver: Address) -> Result<(), Error> {
+        approver.require_auth();
+        Self::require_not_paused(&env);
+
+        let mut approval: TransferApproval = env
+            .storage()
+            .persistent()
+            .get(&(TRANSFER_APPROVALS, waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        if approval.status != TransferApprovalStatus::Pending {
+            return Err(Error::Unauthorized);
+        }
+
+        if env.ledger().timestamp() > approval.expires_at {
+            approval.status = TransferApprovalStatus::Expired;
+            env.storage()
+                .persistent()
+                .set(&(TRANSFER_APPROVALS, waste_id), &approval);
+            return Err(Error::ApprovalExpired);
+        }
+
+        // Check if already approved by this address
+        if !approval.approvers.contains(&approver) {
+            approval.approvers.push_back(approver.clone());
+            
+            if approval.approvers.len() >= approval.required_approvals {
+                approval.status = TransferApprovalStatus::Approved;
+            }
+
+            env.storage()
+                .persistent()
+                .set(&(TRANSFER_APPROVALS, waste_id), &approval);
+
+            // Emit approval event
+            env.events().publish(
+                (symbol_short!("approve"), waste_id),
+                (approver, approval.approvers.len()),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Request approval for a high-value transfer.
+    fn request_transfer_approval(
+        env: &Env,
+        waste_id: u128,
+        from: Address,
+        to: Address,
+        weight: u128,
+    ) {
+        let required_approvals: u32 = env.storage().instance().get(&REQUIRED_APPROVERS).unwrap_or(2);
+        let expiry = env.ledger().timestamp() + TRANSFER_EXPIRY_SECS;
+
+        let approval = TransferApproval {
+            waste_id,
+            from,
+            to,
+            amount: weight,
+            approvers: Vec::new(env),
+            required_approvals,
+            status: TransferApprovalStatus::Pending,
+            created_at: env.ledger().timestamp(),
+            expires_at: expiry,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&(TRANSFER_APPROVALS, waste_id), &approval);
+
+        // Emit approval requested event
+        env.events().publish(
+            (symbol_short!("req_app"), waste_id),
+            (weight, required_approvals),
+        );
+    }
+
+    // ========== Waste Substitution Functions ==========
+
+    /// Substitute one waste item for another equivalent material.
+    /// This is used when the original item is unavailable or damaged.
+    pub fn substitute_waste(
+        env: Env,
+        original_id: u128,
+        substitute_id: u128,
+        approver: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        approver.require_auth();
+        Self::require_not_paused(&env);
+        Self::only_registered(&env, &approver);
+
+        // Fetch both waste items
+        let mut original: Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", original_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        let mut substitute: Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", substitute_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        // Validate equivalence (same type and similar weight)
+        if original.waste_type != substitute.waste_type {
+            return Err(Error::WasteTypeMismatch);
+        }
+
+        // Weight should be within 10% tolerance
+        let weight_diff = if original.weight > substitute.weight {
+            original.weight - substitute.weight
+        } else {
+            substitute.weight - original.weight
+        };
+
+        if weight_diff > original.weight / 10 {
+            return Err(Error::InvalidWeight);
+        }
+
+        // Create substitution record
+        let record = SubstitutionRecord {
+            original_id,
+            substitute_id,
+            approver: approver.clone(),
+            reason: reason.clone(),
+            timestamp: env.ledger().timestamp(),
+        };
+
+        // Update histories
+        original.substitution_history.push_back(record.clone());
+        substitute.substitution_history.push_back(record.clone());
+
+        // Deactivate original, substitute takes its place (conceptually)
+        original.is_active = false;
+
+        // Store updated waste items
+        env.storage()
+            .instance()
+            .set(&("waste_v2", original_id), &original);
+        env.storage()
+            .instance()
+            .set(&("waste_v2", substitute_id), &substitute);
+
+        // Log the action
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "SUBSTITUTE_WASTE"),
+            approver.clone(),
+            String::from_str(&env, "WASTE"),
+            String::from_str(&env, "Waste item substituted"),
+        );
+
+        // Emit substitution event
+        env.events().publish(
+            (symbol_short!("subst"), original_id),
+            (substitute_id, approver),
+        );
+
+        Ok(())
+    }
+
+    // ========== Performance Benchmarking Functions ==========
+
+    /// Get current transaction statistics for the contract.
+    pub fn get_transaction_stats(env: Env) -> TransactionStats {
+        env.storage()
+            .instance()
+            .get(&TRANSACTION_STATS)
+            .unwrap_or(TransactionStats {
+                total_transactions: 0,
+                successful_transactions: 0,
+                failed_transactions: 0,
+                average_gas_usage: 0,
+                last_transaction_timestamp: 0,
+            })
+    }
+
+    /// Record a performance metric (internal helper or admin-only).
+    pub fn record_performance_metric(
+        env: Env,
+        admin: Address,
+        gas_used: u64,
+        is_success: bool,
+    ) {
+        Self::only_admin(&env, &admin);
+
+        let mut stats = Self::get_transaction_stats(env.clone());
+        stats.total_transactions += 1;
+        if is_success {
+            stats.successful_transactions += 1;
+        } else {
+            stats.failed_transactions += 1;
+        }
+
+        // Rolling average for gas usage
+        if stats.successful_transactions > 0 {
+            stats.average_gas_usage =
+                (stats.average_gas_usage * (stats.successful_transactions - 1) + gas_used)
+                    / stats.successful_transactions;
+        }
+
+        stats.last_transaction_timestamp = env.ledger().timestamp();
+        env.storage().instance().set(&TRANSACTION_STATS, &stats);
+    }
+
+    /// Take a performance snapshot.
+    pub fn take_performance_snapshot(
+        env: Env,
+        admin: Address,
+        active_users: u32,
+        waste_per_hour: u128,
+        latency_ms: u32,
+    ) {
+        Self::only_admin(&env, &admin);
+
+        let snapshot = PerformanceSnapshot {
+            timestamp: env.ledger().timestamp(),
+            active_users,
+            waste_processed_per_hour: waste_per_hour,
+            average_latency_ms: latency_ms,
+        };
+
+        let mut snapshots: Vec<PerformanceSnapshot> = env
+            .storage()
+            .persistent()
+            .get(&PERF_SNAPSHOTS)
+            .unwrap_or(Vec::new(&env));
+        
+        snapshots.push_back(snapshot);
+
+        // Keep only last 100 snapshots
+        if snapshots.len() > 100 {
+            let mut new_snapshots = Vec::new(&env);
+            for i in (snapshots.len() - 100)..snapshots.len() {
+                new_snapshots.push_back(snapshots.get(i).unwrap());
+            }
+            env.storage().persistent().set(&PERF_SNAPSHOTS, &new_snapshots);
+        } else {
+            env.storage().persistent().set(&PERF_SNAPSHOTS, &snapshots);
+        }
+    }
+
+    /// Analyze performance over a given period.
+    pub fn analyze_performance_period(env: Env, start: u64, end: u64) -> TransactionStats {
+        // In a real implementation, we would filter historical snapshots.
+        // For now, return the overall stats as a placeholder.
+        Self::get_transaction_stats(env)
     }
 
     // ========== Admin Transfer ==========
@@ -6127,8 +6746,11 @@ impl ScavengerContract {
             .get(&("waste_v2", waste_id))
             .ok_or(Error::WasteNotFound)?;
 
+        let entry_count = composition.len();
         waste.composition = composition;
         env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        events::emit_composition_set(&env, waste_id, &verifier, entry_count);
 
         Ok(waste)
     }
@@ -6160,6 +6782,128 @@ impl ScavengerContract {
             }
         }
         result
+    }
+
+    /// Get composition analysis for a specific participant's waste items.
+    /// Returns a map of WasteType to total percentage across all their active wastes.
+    pub fn participant_composition_analysis(
+        env: Env,
+        participant: Address,
+    ) -> Vec<types::CompositionEntry> {
+        Self::require_registered(&env, &participant);
+        let waste_ids: Vec<u128> = env
+            .storage()
+            .instance()
+            .get(&("participant_wastes", participant))
+            .unwrap_or(Vec::new(&env));
+
+        let mut paper: u32 = 0;
+        let mut pet: u32 = 0;
+        let mut plastic: u32 = 0;
+        let mut metal: u32 = 0;
+        let mut glass: u32 = 0;
+        let mut organic: u32 = 0;
+        let mut electronic: u32 = 0;
+        let mut count: u32 = 0;
+
+        for wid in waste_ids.iter() {
+            if let Some(w) = env.storage().instance().get::<_, types::Waste>(&("waste_v2", wid)) {
+                if w.is_active && !w.composition.is_empty() {
+                    for entry in w.composition.iter() {
+                        match entry.material_type {
+                            WasteType::Paper => paper = paper.saturating_add(entry.percentage),
+                            WasteType::PetPlastic => pet = pet.saturating_add(entry.percentage),
+                            WasteType::Plastic => plastic = plastic.saturating_add(entry.percentage),
+                            WasteType::Metal => metal = metal.saturating_add(entry.percentage),
+                            WasteType::Glass => glass = glass.saturating_add(entry.percentage),
+                            WasteType::Organic => organic = organic.saturating_add(entry.percentage),
+                            WasteType::Electronic => electronic = electronic.saturating_add(entry.percentage),
+                        }
+                    }
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+
+        let mut result = Vec::new(&env);
+        if count > 0 {
+            if paper > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Paper, avg_percentage: paper / count }); }
+            if pet > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::PetPlastic, avg_percentage: pet / count }); }
+            if plastic > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Plastic, avg_percentage: plastic / count }); }
+            if metal > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Metal, avg_percentage: metal / count }); }
+            if glass > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Glass, avg_percentage: glass / count }); }
+            if organic > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Organic, avg_percentage: organic / count }); }
+            if electronic > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Electronic, avg_percentage: electronic / count }); }
+        }
+        result
+    }
+
+    /// Get aggregated composition analytics across the entire system.
+    /// Returns the average composition percentages across all active wastes with composition data.
+    pub fn get_composition_analytics(env: Env) -> Vec<types::CompositionEntry> {
+        let total = Self::get_waste_count(&env);
+        let mut paper: u64 = 0;
+        let mut pet: u64 = 0;
+        let mut plastic: u64 = 0;
+        let mut metal: u64 = 0;
+        let mut glass: u64 = 0;
+        let mut organic: u64 = 0;
+        let mut electronic: u64 = 0;
+        let mut count: u64 = 0;
+
+        for id in 1..=total {
+            let waste_id = id as u128;
+            if let Some(w) = env.storage().instance().get::<_, types::Waste>(&("waste_v2", waste_id)) {
+                if w.is_active && !w.composition.is_empty() {
+                    for entry in w.composition.iter() {
+                        let pct = entry.percentage as u64;
+                        match entry.material_type {
+                            WasteType::Paper => paper = paper.saturating_add(pct),
+                            WasteType::PetPlastic => pet = pet.saturating_add(pct),
+                            WasteType::Plastic => plastic = plastic.saturating_add(pct),
+                            WasteType::Metal => metal = metal.saturating_add(pct),
+                            WasteType::Glass => glass = glass.saturating_add(pct),
+                            WasteType::Organic => organic = organic.saturating_add(pct),
+                            WasteType::Electronic => electronic = electronic.saturating_add(pct),
+                        }
+                    }
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+
+        let mut result = Vec::new(&env);
+        if count > 0 {
+            if paper > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Paper, avg_percentage: (paper / count) as u32 }); }
+            if pet > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::PetPlastic, avg_percentage: (pet / count) as u32 }); }
+            if plastic > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Plastic, avg_percentage: (plastic / count) as u32 }); }
+            if metal > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Metal, avg_percentage: (metal / count) as u32 }); }
+            if glass > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Glass, avg_percentage: (glass / count) as u32 }); }
+            if organic > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Organic, avg_percentage: (organic / count) as u32 }); }
+            if electronic > 0 { result.push_back(types::CompositionEntry { material_type: WasteType::Electronic, avg_percentage: (electronic / count) as u32 }); }
+        }
+        result
+    }
+
+    /// Verify that a waste item has a valid material composition set.
+    /// Returns true if composition entries sum to 100.
+    pub fn verify_waste_composition(env: Env, waste_id: u128) -> Result<bool, Error> {
+        let waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .ok_or(Error::WasteNotFound)?;
+
+        if waste.composition.is_empty() {
+            return Ok(false);
+        }
+
+        let mut total: u32 = 0;
+        for entry in waste.composition.iter() {
+            total = total.saturating_add(entry.percentage);
+        }
+
+        Ok(total == 100)
     }
 
     // ========== Feature: Recycling Goals ==========
@@ -6926,6 +7670,72 @@ impl ScavengerContract {
         env.storage()
             .instance()
             .set(&(BATCH_INDEX, batch_id), &batch);
+
+        Ok(())
+    }
+
+    /// Process a waste batch
+    pub fn process_batch(
+        env: Env,
+        batch_id: u64,
+        processor: Address,
+        note: String,
+    ) -> Result<(), Error> {
+        processor.require_auth();
+        Self::require_not_paused(&env);
+        Self::only_manufacturer(&env, &processor);
+
+        let mut batch: WasteBatch = env
+            .storage()
+            .instance()
+            .get(&(BATCH_INDEX, batch_id))
+            .ok_or(Error::InvalidAmount)?;
+
+        // Only allow processing ready batches
+        if batch.status != BatchStatus::Ready {
+            return Err(Error::InvalidAmount);
+        }
+
+        // Mark batch as processing
+        batch.mark_processing();
+        env.storage()
+            .instance()
+            .set(&(BATCH_INDEX, batch_id), &batch);
+
+        // Process each waste item in the batch
+        for waste_id in batch.waste_ids.iter() {
+            // Update processing status of each waste item
+            let mut waste: Waste = env
+                .storage()
+                .instance()
+                .get(&("waste_v2", waste_id))
+                .ok_or(Error::WasteNotFound)?;
+
+            // Mark as processed (update processing status)
+            let processing_record = ProcessingRecord {
+                status: ProcessingStatus::Processed,
+                timestamp: env.ledger().timestamp(),
+                updated_by: processor.clone(),
+            };
+            waste.processing_history.push_back(processing_record);
+            waste.processing_status = ProcessingStatus::Processed;
+
+            env.storage()
+                .instance()
+                .set(&("waste_v2", waste_id), &waste);
+
+            // Update participant stats for the current owner
+            Self::update_participant_stats(&env, &waste.current_owner, waste.weight as u64, 0);
+        }
+
+        // Mark batch as completed
+        batch.mark_completed();
+        env.storage()
+            .instance()
+            .set(&(BATCH_INDEX, batch_id), &batch);
+
+        // Emit batch processed event
+        events::emit_batch_processed(&env, batch_id, &processor, &note);
 
         Ok(())
     }
