@@ -94,6 +94,19 @@ const WasteStatisticsPage = lazy(() =>
 const RewardTrackingPage = lazy(() =>
   import('@/pages/RewardTrackingPage').then((m) => ({ default: m.RewardTrackingPage }))
 )
+const MaterialTransferPage = lazy(() =>
+  import('@/pages/MaterialTransferPage').then((m) => ({ default: m.MaterialTransferPage }))
+)
+const WasteVerificationDashboardPage = lazy(() =>
+  import('@/pages/WasteVerificationDashboardPage').then((m) => ({
+    default: m.WasteVerificationDashboardPage
+  }))
+)
+const ParticipantRegistrationPage = lazy(() =>
+  import('@/pages/ParticipantRegistrationPage').then((m) => ({
+    default: m.ParticipantRegistrationPage
+  }))
+)
 
 // eslint-disable-next-line react-refresh/only-export-components
 function PageFallback() {
@@ -127,7 +140,7 @@ export const router = createBrowserRouter([
       { path: 'submit', element: <div>Submit Waste</div> },
       { path: 'collect', element: <CollectorDashboardPage /> },
       { path: 'incentives', element: <IncentivesMarketplacePage /> },
-      { path: 'transfer', element: <div>Transfer</div> },
+      { path: 'transfer', element: <MaterialTransferPage /> },
       { path: 'history', element: <div>History</div> },
       { path: 'dashboard/recycler', element: <RecyclerDashboard /> },
       { path: 'wastes', element: <WasteListPage /> },
@@ -153,7 +166,9 @@ export const router = createBrowserRouter([
       { path: 'waste-history', element: <WasteHistoryPage /> },
       { path: 'participant-search', element: <ParticipantSearchPage /> },
       { path: 'waste-statistics', element: <WasteStatisticsPage /> },
-      { path: 'reward-tracking', element: <RewardTrackingPage /> }
+      { path: 'reward-tracking', element: <RewardTrackingPage /> },
+      { path: 'verification-dashboard', element: <WasteVerificationDashboardPage /> },
+      { path: 'register', element: <ParticipantRegistrationPage /> }
     ]
   },
   { path: '*', element: <NotFoundPage /> }
