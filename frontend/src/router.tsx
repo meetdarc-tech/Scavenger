@@ -113,6 +113,12 @@ const TestReportsPage = lazy(() =>
 const ComplianceReportsPage = lazy(() =>
   import('@/pages/ComplianceReportsPage').then((m) => ({ default: m.ComplianceReportsPage }))
 )
+const NotificationCenterPage = lazy(() =>
+  import('@/pages/NotificationCenterPage').then((m) => ({ default: m.NotificationCenterPage }))
+)
+const BatchUploadPage = lazy(() =>
+  import('@/pages/BatchUploadPage').then((m) => ({ default: m.BatchUploadPage }))
+)
 
 // eslint-disable-next-line react-refresh/only-export-components
 function PageFallback() {
@@ -176,7 +182,9 @@ export const router = createBrowserRouter([
       { path: 'verification-dashboard', element: <WasteVerificationDashboardPage /> },
       { path: 'register', element: <ParticipantRegistrationPage /> },
       { path: 'test-reports', element: <TestReportsPage /> },
-      { path: 'compliance-reports', element: <ComplianceReportsPage /> }
+      { path: 'compliance-reports', element: <ComplianceReportsPage /> },
+      { path: 'notifications', element: <NotificationCenterPage /> },
+      { path: 'batch-upload', element: <BatchUploadPage /> }
     ]
   },
   { path: '*', element: <NotFoundPage /> }

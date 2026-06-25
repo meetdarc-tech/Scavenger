@@ -9,13 +9,19 @@ import {
   Search,
   Ban,
   CheckCircle2,
-  XCircle,
-  ChevronDown,
+  AlertTriangle,
+  Heart,
+  Cpu,
+  Database,
+  Wifi,
+  UserX,
+  UserCheck,
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { ScavengerClient } from '@/api/client'
 import { useContract } from '@/context/ContractContext'
 import { useWallet } from '@/context/WalletContext'
+import { useAuth } from '@/context/AuthContext'
 import { networkConfig } from '@/lib/stellar'
 import { wasteTypeLabel, formatDate, formatAddress } from '@/lib/helpers'
 import { StatCard } from '@/components/ui/StatCard'
@@ -77,15 +83,50 @@ function addAuditEntry(action: string, target: string) {
   if (_auditLog.length > 50) _auditLog.pop()
 }
 
+// ── Mock data for new features ────────────────────────────────────────────────
+
+interface MockUser {
+  address: string
+  role: string
+  name: string
+  status: 'active' | 'suspended'
+  joined: number
+}
+
+const MOCK_USERS: MockUser[] = [
+  { address: 'GABC...1234', role: 'Recycler', name: 'Alice Green', status: 'active', joined: Date.now() / 1000 - 86400 * 30 },
+  { address: 'GDEF...5678', role: 'Collector', name: 'Bob Smith', status: 'active', joined: Date.now() / 1000 - 86400 * 15 },
+  { address: 'GHIJ...9012', role: 'Manufacturer', name: 'Carol White', status: 'suspended', joined: Date.now() / 1000 - 86400 * 60 },
+  { address: 'GKLM...3456', role: 'Recycler', name: 'Dave Brown', status: 'active', joined: Date.now() / 1000 - 86400 * 7 },
+]
+
+interface Dispute {
+  id: number
+  wastId: number
+  reporter: string
+  description: string
+  status: 'open' | 'resolved' | 'dismissed'
+  createdAt: number
+}
+
+const MOCK_DISPUTES: Dispute[] = [
+  { id: 1, wastId: 42, reporter: 'GABC...1234', description: 'Weight reported does not match actual', status: 'open', createdAt: Date.now() / 1000 - 3600 },
+  { id: 2, wastId: 17, reporter: 'GDEF...5678', description: 'Location coordinates are incorrect', status: 'open', createdAt: Date.now() / 1000 - 7200 },
+  { id: 3, wastId: 8, reporter: 'GHIJ...9012', description: 'Waste type mislabeled', status: 'resolved', createdAt: Date.now() / 1000 - 86400 },
+]
+
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'wastes' | 'incentives' | 'config' | 'audit'
+type Tab = 'overview' | 'users' | 'disputes' | 'wastes' | 'incentives' | 'health' | 'config' | 'audit'
 
-const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+const TABS: { id: Tab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
   { id: 'overview', label: 'Overview', icon: <Activity className="h-4 w-4" /> },
+  { id: 'users', label: 'Users', icon: <Users className="h-4 w-4" /> },
+  { id: 'disputes', label: 'Disputes', icon: <AlertTriangle className="h-4 w-4" /> },
   { id: 'wastes', label: 'Wastes', icon: <Package className="h-4 w-4" /> },
   { id: 'incentives', label: 'Incentives', icon: <Gift className="h-4 w-4" /> },
-  { id: 'config', label: 'Config', icon: <Settings className="h-4 w-4" /> },
+  { id: 'health', label: 'System Health', icon: <Heart className="h-4 w-4" /> },
+  { id: 'config', label: 'Config', icon: <Settings className="h-4 w-4" />, adminOnly: true },
   { id: 'audit', label: 'Audit Log', icon: <ShieldAlert className="h-4 w-4" /> },
 ]
 
@@ -112,12 +153,158 @@ function OverviewTab() {
         />
         <StatCard
           icon={<Users className="h-4 w-4" />}
-          label="Active Incentives"
-          value="—"
+          label="Registered Users"
+          value={MOCK_USERS.length}
           variant="success"
-          isLoading={isLoading}
+          isLoading={false}
         />
       </div>
+    </div>
+  )
+}
+
+// ── User Management tab ───────────────────────────────────────────────────────
+
+function UsersTab() {
+  const [users, setUsers] = useState<MockUser[]>(MOCK_USERS)
+  const [search, setSearch] = useState('')
+
+  const filtered = users.filter(
+    (u) =>
+      !search ||
+      u.name.toLowerCase().includes(search.toLowerCase()) ||
+      u.address.toLowerCase().includes(search.toLowerCase()) ||
+      u.role.toLowerCase().includes(search.toLowerCase())
+  )
+
+  function toggleStatus(address: string) {
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.address === address
+          ? { ...u, status: u.status === 'active' ? 'suspended' : 'active' }
+          : u
+      )
+    )
+    addAuditEntry('toggle_user_status', address)
+  }
+
+  return (
+    <div className="space-y-4">
+      <Input
+        placeholder="Search by name, address or role…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        aria-label="Search users"
+      />
+      <div className="divide-y divide-border rounded-lg border">
+        {filtered.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-muted-foreground">No users found.</p>
+        ) : (
+          filtered.map((u) => (
+            <div key={u.address} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <p className="font-medium text-sm truncate">{u.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {u.address} · {u.role} · Joined {formatDate(u.joined)}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Badge variant={u.status === 'active' ? 'default' : 'outline'}>
+                  {u.status}
+                </Badge>
+                <Button
+                  size="sm"
+                  variant={u.status === 'active' ? 'destructive' : 'outline'}
+                  onClick={() => toggleStatus(u.address)}
+                  aria-label={u.status === 'active' ? 'Suspend user' : 'Reactivate user'}
+                >
+                  {u.status === 'active' ? (
+                    <UserX className="h-3.5 w-3.5" />
+                  ) : (
+                    <UserCheck className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Disputes tab ──────────────────────────────────────────────────────────────
+
+function DisputesTab() {
+  const [disputes, setDisputes] = useState<Dispute[]>(MOCK_DISPUTES)
+  const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all')
+
+  const displayed = filter === 'all' ? disputes : disputes.filter((d) => d.status === filter)
+
+  function resolve(id: number) {
+    setDisputes((prev) => prev.map((d) => (d.id === id ? { ...d, status: 'resolved' } : d)))
+    addAuditEntry('resolve_dispute', String(id))
+  }
+
+  function dismiss(id: number) {
+    setDisputes((prev) => prev.map((d) => (d.id === id ? { ...d, status: 'dismissed' } : d)))
+    addAuditEntry('dismiss_dispute', String(id))
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        {(['all', 'open', 'resolved'] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors capitalize ${
+              filter === f ? 'bg-primary text-primary-foreground' : 'border hover:bg-accent'
+            }`}
+          >
+            {f}
+          </button>
+        ))}
+      </div>
+
+      {displayed.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No disputes found.</p>
+      ) : (
+        <div className="divide-y divide-border rounded-lg border">
+          {displayed.map((d) => (
+            <div key={d.id} className="px-4 py-3 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">
+                    Dispute #{d.id} — Waste #{d.wastId}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Reporter: {d.reporter} · {formatDate(d.createdAt)}
+                  </p>
+                  <p className="text-sm mt-1">{d.description}</p>
+                </div>
+                <Badge
+                  variant={d.status === 'open' ? 'default' : 'outline'}
+                  className="shrink-0"
+                >
+                  {d.status}
+                </Badge>
+              </div>
+              {d.status === 'open' && (
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => resolve(d.id)}>
+                    <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+                    Resolve
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => dismiss(d.id)}>
+                    Dismiss
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -128,7 +315,6 @@ function WastesTab() {
   const [wasteId, setWasteId] = useState('')
   const [searched, setSearched] = useState<bigint | null>(null)
   const { config } = useContract()
-  const { address } = useWallet()
 
   const { data: waste, isLoading } = useQuery({
     queryKey: ['admin-waste', searched?.toString()],
@@ -144,9 +330,8 @@ function WastesTab() {
   })
 
   const handleDeactivate = async () => {
-    if (!waste || !address) return
+    if (!waste) return
     addAuditEntry('deactivate_waste', waste.waste_id.toString())
-    // Optimistic UI — actual call requires admin signer
     alert(`Deactivate waste #${waste.waste_id} — connect admin wallet to confirm.`)
   }
 
@@ -195,7 +380,7 @@ function WastesTab() {
               <Button
                 variant="destructive"
                 size="sm"
-                onClick={handleDeactivate}
+                onClick={() => void handleDeactivate()}
                 disabled={!waste.is_active}
                 aria-label="Deactivate waste"
               >
@@ -260,6 +445,59 @@ function IncentivesTab() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── System Health tab ─────────────────────────────────────────────────────────
+
+const HEALTH_METRICS = [
+  { label: 'RPC Node', icon: <Wifi className="h-4 w-4" />, status: 'healthy', latency: '42ms' },
+  { label: 'Contract', icon: <Cpu className="h-4 w-4" />, status: 'healthy', latency: '—' },
+  { label: 'Firebase DB', icon: <Database className="h-4 w-4" />, status: 'healthy', latency: '18ms' },
+  { label: 'Indexer', icon: <Activity className="h-4 w-4" />, status: 'degraded', latency: '320ms' },
+]
+
+function SystemHealthTab() {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {HEALTH_METRICS.map(({ label, icon, status, latency }) => (
+          <Card key={label}>
+            <CardContent className="flex items-center justify-between pt-4 pb-4">
+              <div className="flex items-center gap-3">
+                <span className="text-muted-foreground">{icon}</span>
+                <div>
+                  <p className="text-sm font-medium">{label}</p>
+                  <p className="text-xs text-muted-foreground">Latency: {latency}</p>
+                </div>
+              </div>
+              <span
+                className={`flex h-2.5 w-2.5 rounded-full ${
+                  status === 'healthy' ? 'bg-green-500' : 'bg-yellow-500'
+                }`}
+              />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Uptime (last 7 days)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-0.5">
+            {Array.from({ length: 28 }).map((_, i) => (
+              <div
+                key={i}
+                className={`h-6 flex-1 rounded-sm ${i === 19 ? 'bg-yellow-400' : 'bg-green-500'}`}
+                title={i === 19 ? 'Degraded' : 'Healthy'}
+              />
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">99.6% uptime</p>
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -346,7 +584,13 @@ function AuditLogTab() {
 
 export function AdminDashboardPage() {
   useAppTitle('Admin Dashboard')
+  const { user } = useAuth()
   const [activeTab, setActiveTab] = useState<Tab>('overview')
+
+  const isAdmin = user?.role === 'Admin'
+
+  // Filter tabs based on permissions
+  const visibleTabs = TABS.filter((t) => !t.adminOnly || isAdmin)
 
   return (
     <div className="space-y-6 px-4 py-6 sm:space-y-8 sm:py-8">
@@ -358,13 +602,20 @@ export function AdminDashboardPage() {
         </div>
       </div>
 
+      {!isAdmin && (
+        <div className="flex items-center gap-2 rounded-md border border-yellow-400 bg-yellow-50 px-4 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Some sections are restricted to admin accounts only.
+        </div>
+      )}
+
       {/* Tab bar */}
       <div
         role="tablist"
         aria-label="Admin sections"
         className="flex flex-wrap gap-1 rounded-lg border bg-muted p-1"
       >
-        {TABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.id}
             role="tab"
@@ -385,9 +636,12 @@ export function AdminDashboardPage() {
       {/* Tab panels */}
       <div role="tabpanel">
         {activeTab === 'overview' && <OverviewTab />}
+        {activeTab === 'users' && <UsersTab />}
+        {activeTab === 'disputes' && <DisputesTab />}
         {activeTab === 'wastes' && <WastesTab />}
         {activeTab === 'incentives' && <IncentivesTab />}
-        {activeTab === 'config' && <ConfigTab />}
+        {activeTab === 'health' && <SystemHealthTab />}
+        {activeTab === 'config' && isAdmin && <ConfigTab />}
         {activeTab === 'audit' && <AuditLogTab />}
       </div>
     </div>
