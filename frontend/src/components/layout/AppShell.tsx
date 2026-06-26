@@ -24,6 +24,8 @@ import {
   TrendingUp,
   Trophy,
   WifiOff,
+  Bell,
+  Upload,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWallet } from '@/context/WalletContext'
@@ -125,6 +127,18 @@ const NAV_LINKS = [
     icon: Trophy
   },
   {
+    label: 'Notifications',
+    href: '/notifications',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: Bell
+  },
+  {
+    label: 'Batch Upload',
+    href: '/batch-upload',
+    roles: ['Recycler', 'Collector'],
+    icon: Upload
+  },
+  {
     label: 'Offline',
     href: '/offline',
     roles: ['Recycler', 'Collector', 'Manufacturer'],
@@ -156,6 +170,8 @@ function getOnboardingDataAttribute(href: string): string | undefined {
     '/donations': 'donations',
     '/predictions': 'predictions',
     '/achievements': 'achievements',
+    '/notifications': 'notifications',
+    '/batch-upload': 'batch-upload',
     '/offline': 'offline',
   }
   return attributeMap[href]
