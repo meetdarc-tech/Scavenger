@@ -1,64 +1,40 @@
-# API Rate Limiting
+# Rate Limiting
 
-## Overview
+The Scavenger backend enforces per-IP rate limits using a **sliding window** algorithm.
 
-Rate limiting is implemented as middleware to protect API endpoints from abuse and ensure fair resource usage.
+## Tiers
 
-## Configuration
+| Tier | Requests / minute | Requests / hour |
+|------|-------------------|-----------------|
+| Anonymous | 30 | 200 |
+| Free | 60 | 1 000 |
+| Premium | 300 | 5 000 |
+| Admin | 1 000 | 50 000 |
 
-Default limits:
-- **Per Minute**: 60 requests
-- **Per Hour**: 1000 requests
-
-Configure via environment variables:
-```bash
-RATE_LIMIT_PER_MINUTE=60
-RATE_LIMIT_PER_HOUR=1000
-```
+The default tier applied to all requests is **Free** unless the middleware is configured with a specific `RateLimitConfig`.
 
 ## Response Headers
 
-All responses include rate limit information:
-```
-X-RateLimit-Limit-Minute: 60
-X-RateLimit-Limit-Hour: 1000
-```
+Every response includes:
 
-## Error Handling
+| Header | Description |
+|--------|-------------|
+| `X-RateLimit-Limit-Minute` | Maximum requests allowed per minute |
+| `X-RateLimit-Limit-Hour` | Maximum requests allowed per hour |
+| `X-RateLimit-Remaining-Minute` | Requests remaining in the current minute window |
+| `X-RateLimit-Remaining-Hour` | Requests remaining in the current hour window |
+| `Retry-After` | Seconds until the window resets (only on 429 responses) |
 
-When rate limit is exceeded, the API returns:
-```
-HTTP 429 Too Many Requests
-Content-Type: application/json
+## Handling 429 Too Many Requests
 
-{
-  "error": "Rate limit exceeded: 60 requests per minute"
-}
-```
+When rate limited, the API returns HTTP `429` with a plain-text body. Clients should:
 
-## Implementation
+1. Read `Retry-After` to determine when to retry.
+2. Implement exponential backoff for repeated 429s.
+3. Cache responses where possible to reduce request volume.
 
-The rate limiting middleware:
-1. Tracks requests per IP address
-2. Maintains separate buckets for minute and hour windows
-3. Automatically cleans up expired entries
-4. Returns 429 status when limits are exceeded
+## Sliding Window Algorithm
 
-## Usage
+Each request timestamp is stored in an in-memory bucket keyed by `<ip>:<window>`. On every request, timestamps older than the window duration are evicted, and the remaining count is compared against the limit. This avoids the burst problem of fixed-window counters.
 
-The middleware is automatically applied to all routes in the application.
-
-```rust
-HttpServer::new(move || {
-    App::new()
-        .wrap(RateLimitMiddleware::new(rate_limit_config))
-        // ... other middleware and routes
-})
-```
-
-## Monitoring
-
-Monitor rate limit violations in logs:
-```
-WARN: Rate limit exceeded for IP: 192.168.1.1
-```
+For production deployments with multiple instances, replace the in-memory store with a shared Redis-backed implementation (see `indexer/src/rate-limit/rate-limiter.ts` for a Redis reference implementation).
