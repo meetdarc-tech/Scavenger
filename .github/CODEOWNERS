@@ -1,0 +1,15 @@
+# Global owners
+* @Xoulomon
+
+# Smart contract
+/stellar-contract/ @Xoulomon
+/contracts/ @Xoulomon
+
+# Frontend
+/frontend/ @Xoulomon
+
+# CI/CD
+/.github/ @Xoulomon
+
+# Docs
+/docs/ @Xoulomon
