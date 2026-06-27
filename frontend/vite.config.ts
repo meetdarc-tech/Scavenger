@@ -35,6 +35,17 @@ export default defineConfig({
     workbox: {
       globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
       runtimeCaching: [{
+        urlPattern: /\/api\/(participants|wastes|metrics|incentives|stats)/,
+        handler: 'NetworkFirst',
+        options: {
+          cacheName: 'api-response-cache',
+          expiration: {
+            maxEntries: 200,
+            maxAgeSeconds: 60 // 1 minute
+          },
+          networkTimeoutSeconds: 5,
+        }
+      }, {
         urlPattern: /^https:\/\/.*\.stellar\.org\/.*/i,
         handler: 'NetworkFirst',
         options: {
@@ -57,6 +68,16 @@ export default defineConfig({
           expiration: {
             maxEntries: 50,
             maxAgeSeconds: 60 * 60 * 24 * 30 // 30 days
+          }
+        }
+      }, {
+        urlPattern: /\/api\/.*/i,
+        handler: 'NetworkFirst',
+        options: {
+          cacheName: 'backend-api-cache',
+          expiration: {
+            maxEntries: 50,
+            maxAgeSeconds: 60
           }
         }
       }]

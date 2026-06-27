@@ -12,6 +12,7 @@ mod upgrade;
 mod explorer;
 mod analytics;
 mod audit_log;
+mod storage_utils;
 
 pub use errors::Error;
 pub use types::{
@@ -250,6 +251,7 @@ impl ScavengerContract {
     /// # Errors
     /// - Panics `"Admin already initialized"` if called more than once.
     pub fn initialize_admin(env: Env, admin: Address) {
+        storage_utils::bump_instance(&env);
         // Reentrancy guard
         Self::lock(&env);
         admin.require_auth();
@@ -261,8 +263,16 @@ impl ScavengerContract {
         }
 
         let mut admins = Vec::new(&env);
-        admins.push_back(admin);
+        admins.push_back(admin.clone());
         env.storage().instance().set(&ADMINS, &admins);
+
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "initialize_admin"),
+            admin,
+            String::from_str(&env, "admin"),
+            String::from_str(&env, "Admin initialized"),
+        );
 
         Self::unlock(&env);
     }
@@ -308,6 +318,13 @@ impl ScavengerContract {
         }
         env.storage().instance().set(&ADMINS, &new_admins);
         events::emit_admin_transferred(&env, &current_admin);
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "transfer_admin"),
+            current_admin,
+            String::from_str(&env, "admin"),
+            String::from_str(&env, "Admin transferred"),
+        );
         Self::unlock(&env);
     }
 
@@ -940,6 +957,14 @@ impl ScavengerContract {
             name.clone(),
             latitude,
             longitude,
+        );
+
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "register_participant"),
+            address,
+            String::from_str(&env, "participant"),
+            String::from_str(&env, "Participant registered"),
         );
 
         participant
@@ -1980,6 +2005,14 @@ impl ScavengerContract {
         participant.role = new_role;
         Self::set_participant(&env, &address, &participant);
 
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "update_role"),
+            address,
+            String::from_str(&env, "participant"),
+            String::from_str(&env, "Role updated"),
+        );
+
         participant
     }
 
@@ -2024,6 +2057,14 @@ impl ScavengerContract {
             }
         }
         env.storage().instance().set(&PART_INDEX, &new_index);
+
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "deregister_participant"),
+            address,
+            String::from_str(&env, "participant"),
+            String::from_str(&env, "Participant deregistered"),
+        );
 
         participant
     }
@@ -3059,6 +3100,14 @@ impl ScavengerContract {
             .set(&("waste_v2", waste_id), &waste);
 
         events::emit_waste_deactivated(&env, waste_id, &admin);
+
+        audit_log::AuditLogService::log_action(
+            &env,
+            String::from_str(&env, "deactivate_waste"),
+            admin,
+            String::from_str(&env, "waste"),
+            String::from_str(&env, "Waste deactivated"),
+        );
 
         waste
     }

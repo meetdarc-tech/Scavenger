@@ -31,8 +31,35 @@ export function getSlowQueries(threshold = SLOW_QUERY_THRESHOLD): QueryMetrics[]
   return queryMetrics.filter((m) => m.duration > threshold);
 }
 
+export function getQueryStats() {
+  const total = queryMetrics.length;
+  const slow = queryMetrics.filter((m) => m.duration > SLOW_QUERY_THRESHOLD).length;
+  const avgDuration = total > 0 ? queryMetrics.reduce((s, m) => s + m.duration, 0) / total : 0;
+  return { total, slow, avgDuration: Math.round(avgDuration), slowThreshold: SLOW_QUERY_THRESHOLD };
+}
+
 export function clearMetrics(): void {
   queryMetrics.length = 0;
+}
+
+/**
+ * Cache-aside wrapper for query results.
+ * If a cache is provided, attempts to serve from cache before running the query.
+ */
+export async function withQueryCache<T>(
+  cacheKey: string,
+  ttlType: string,
+  loader: () => Promise<T>,
+  cache?: { get: (k: string) => Promise<T | null>; set: (k: string, v: T, t: string) => Promise<void> }
+): Promise<T> {
+  if (cache) {
+    const cached = await cache.get(cacheKey);
+    if (cached !== null) return cached;
+    const result = await loader();
+    await cache.set(cacheKey, result, ttlType);
+    return result;
+  }
+  return loader();
 }
 
 /**
@@ -66,12 +93,23 @@ export async function ensureIndexes(client: PoolClient): Promise<void> {
     // Composite indexes for common queries
     `CREATE INDEX IF NOT EXISTS idx_wastes_recycler_active ON wastes (recycler_address, is_active)`,
     `CREATE INDEX IF NOT EXISTS idx_wastes_type_active ON wastes (waste_type, is_active)`,
+
+    // Composite indexes for time-range queries (issue #769)
+    `CREATE INDEX IF NOT EXISTS idx_wastes_type_registered ON wastes (waste_type, registered_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_wastes_recycler_active_time ON wastes (recycler_address, is_active, registered_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_transfers_waste_time ON waste_transfers (waste_id, transferred_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_rewards_recipient_time ON token_rewards (recipient_address, rewarded_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_raw_events_ledger_type ON raw_events (ledger_sequence DESC, event_type)`,
+
+    // Partial indexes
+    `CREATE INDEX IF NOT EXISTS idx_wastes_active_only ON wastes (registered_at DESC) WHERE is_active = true`,
+    `CREATE INDEX IF NOT EXISTS idx_wastes_confirmed_active ON wastes (recycler_address, registered_at DESC) WHERE is_confirmed = true AND is_active = true`,
   ];
 
   for (const index of indexes) {
     try {
       await client.query(index);
-    } catch (err) {
+    } catch (_err) {
       // Index may already exist, continue
     }
   }

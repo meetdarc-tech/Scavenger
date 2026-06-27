@@ -1,4 +1,5 @@
 import { getPool } from '../db/client';
+import { recordQueryMetric } from '../db/queryOptimizer';
 
 export interface EventFilter {
   eventType?: string;
@@ -47,25 +48,28 @@ export async function queryEvents(filter: EventFilter): Promise<EventQueryResult
     params.push(filter.transactionHash);
   }
 
-  const countResult = await pool.query(
-    sql.replace('SELECT *', 'SELECT COUNT(*)::int as total'),
-    params
-  );
+  const countSql = sql.replace('SELECT *', 'SELECT COUNT(*)::int as total');
+  let t = Date.now();
+  const countResult = await pool.query(countSql, params);
+  recordQueryMetric(countSql, Date.now() - t, 1);
   const total = countResult.rows[0]?.total ?? 0;
 
   sql += ` ORDER BY ledger_sequence DESC, id DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
   params.push(limit, offset);
 
+  t = Date.now();
   const { rows } = await pool.query(sql, params);
+  recordQueryMetric(sql, Date.now() - t, rows.length);
 
   return { events: rows, total, limit, offset };
 }
 
 export async function queryEventTypes(): Promise<string[]> {
   const pool = getPool();
-  const { rows } = await pool.query(
-    'SELECT DISTINCT event_type FROM raw_events ORDER BY event_type'
-  );
+  const querySql = 'SELECT DISTINCT event_type FROM raw_events ORDER BY event_type';
+  const t = Date.now();
+  const { rows } = await pool.query(querySql);
+  recordQueryMetric(querySql, Date.now() - t, rows.length);
   return rows.map(r => r.event_type);
 }
 
@@ -82,14 +86,15 @@ export async function queryEventsByDateRange(
     params.push(eventType);
   }
 
-  const { rows } = await pool.query(
-    `SELECT DATE(created_at) as date, COUNT(*)::int as count
+  const querySql = `SELECT DATE(created_at) as date, COUNT(*)::int as count
      FROM raw_events
      WHERE created_at >= $1 AND created_at <= $2${typeFilter}
      GROUP BY DATE(created_at)
-     ORDER BY date`,
-    params
-  );
+     ORDER BY date`;
+
+  const t = Date.now();
+  const { rows } = await pool.query(querySql, params);
+  recordQueryMetric(querySql, Date.now() - t, rows.length);
 
   return rows.map(r => ({ date: r.date.toISOString().slice(0, 10), count: r.count }));
 }

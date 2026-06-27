@@ -1,6 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Mutex;
 use tracing::info;
 
@@ -182,7 +183,8 @@ impl AuditService {
         };
 
         if let Ok(mut entries) = self.entries.lock() {
-            entries.push(entry);
+            entries.push(entry.clone());
+            self.persist_to_file(&entry);
             self.check_alerts(&event_type);
         }
 
@@ -194,6 +196,18 @@ impl AuditService {
         );
 
         id
+    }
+
+    fn persist_to_file(&self, entry: &AuditEntry) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/audit.log")
+        {
+            if let Ok(line) = serde_json::to_string(entry) {
+                let _ = writeln!(file, "{}", line);
+            }
+        }
     }
 
     pub fn log_entry_with_changes(
