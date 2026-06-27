@@ -1,144 +1,185 @@
-apiVersion: batch/v1
-kind: CronJob
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: postgres-backup
-  namespace: scavenger
-  labels:
-    app: scavenger
-    component: backup
-spec:
-  schedule: "0 3 * * *"
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 7
-  failedJobsHistoryLimit: 3
-  jobTemplate:
-    spec:
-      template:
-        metadata:
-          labels:
-            app: scavenger
-            component: backup
-        spec:
-          restartPolicy: OnFailure
-          containers:
-          - name: postgres-backup
-            image: postgres:15
-            env:
-            - name: PGPASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secrets
-                  key: POSTGRES_PASSWORD
-            - name: PGHOST
-              value: postgres-primary
-            - name: PGUSER
-              value: scavenger
-            - name: PGDATABASE
-              value: scavenger
-            - name: AWS_DEFAULT_REGION
-              value: us-east-1
-            - name: S3_BUCKET
-              valueFrom:
-                configMapKeyRef:
-                  name: scavenger-config
-                  key: backup_s3_bucket
-                  optional: true
-            command:
-            - /bin/bash
-            - -c
-            - |
-              set -euo pipefail
-              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-              BACKUP_FILE="/tmp/db_backup_${TIMESTAMP}.sql.gz"
-
-              echo "Starting backup at ${TIMESTAMP}..."
-              pg_dump -h "$PGHOST" -U "$PGUSER" "$PGDATABASE" | gzip > "$BACKUP_FILE"
-
-              if gunzip -t "$BACKUP_FILE"; then
-                echo "Backup integrity verified: $BACKUP_FILE"
-              else
-                echo "Backup integrity check failed" >&2
-                exit 1
-              fi
-
-              if [ -n "${S3_BUCKET:-}" ]; then
-                aws s3 cp "$BACKUP_FILE" "s3://${S3_BUCKET}/database/${TIMESTAMP}/" --sse AES256
-                echo "Backup uploaded to S3"
-              fi
-
-              echo "Backup completed successfully"
-            resources:
-              requests:
-                memory: "256Mi"
-                cpu: "100m"
-              limits:
-                memory: "512Mi"
-                cpu: "500m"
+  name: backup-scripts
+  namespace: default
+data:
+  backup-database.sh: |
+    #!/bin/bash
+    set -e
+    BACKUP_DIR="/backups"
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_FILE="${BACKUP_DIR}/postgres_${TIMESTAMP}.sql"
+    
+    mkdir -p ${BACKUP_DIR}
+    
+    pg_dump \
+      -h ${POSTGRES_HOST} \
+      -U ${POSTGRES_USER} \
+      -F c \
+      ${POSTGRES_DB} > ${BACKUP_FILE}
+    
+    # Upload to S3
+    aws s3 cp ${BACKUP_FILE} s3://${S3_BACKUP_BUCKET}/db/
+    
+    # Keep only last 30 local copies
+    find ${BACKUP_DIR} -name "postgres_*.sql" -mtime +30 -delete
+    
+    echo "Backup completed: ${BACKUP_FILE}"
+  
+  backup-contract-state.sh: |
+    #!/bin/bash
+    set -e
+    BACKUP_DIR="/backups"
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_FILE="${BACKUP_DIR}/contract_state_${TIMESTAMP}.json"
+    
+    mkdir -p ${BACKUP_DIR}
+    
+    soroban contract invoke \
+      --id ${CONTRACT_ID} \
+      --network ${SOROBAN_NETWORK} \
+      --op get_metrics > ${BACKUP_FILE}
+    
+    aws s3 cp ${BACKUP_FILE} s3://${S3_BACKUP_BUCKET}/contract/
+    
+    echo "Contract state backup completed: ${BACKUP_FILE}"
 
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: postgres-backup-verify
-  namespace: scavenger
-  labels:
-    app: scavenger
-    component: backup-verify
+  name: database-backup
+  namespace: default
 spec:
-  schedule: "0 4 * * 0"
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 4
-  failedJobsHistoryLimit: 2
+  schedule: "0 * * * *"  # Every hour
   jobTemplate:
     spec:
       template:
-        metadata:
-          labels:
-            app: scavenger
-            component: backup-verify
         spec:
-          restartPolicy: OnFailure
+          serviceAccountName: backup-sa
           containers:
-          - name: backup-verify
-            image: postgres:15
-            env:
-            - name: PGPASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secrets
-                  key: POSTGRES_PASSWORD
-            - name: AWS_DEFAULT_REGION
-              value: us-east-1
-            - name: S3_BUCKET
-              valueFrom:
-                configMapKeyRef:
-                  name: scavenger-config
-                  key: backup_s3_bucket
-                  optional: true
+          - name: postgres-backup
+            image: postgres:15-alpine
             command:
-            - /bin/bash
+            - /bin/sh
             - -c
             - |
-              set -euo pipefail
-              echo "Starting weekly backup restore verification..."
+              cat /scripts/backup-database.sh | bash
+            env:
+            - name: POSTGRES_HOST
+              value: "postgres.default.svc.cluster.local"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: POSTGRES_DB
+              value: "scavenger"
+            - name: S3_BACKUP_BUCKET
+              value: "scavenger-backups"
+            - name: AWS_REGION
+              value: "us-east-1"
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: backups
+              mountPath: /backups
+          volumes:
+          - name: scripts
+            configMap:
+              name: backup-scripts
+              defaultMode: 0755
+          - name: backups
+            emptyDir: {}
+          restartPolicy: OnFailure
 
-              if [ -z "${S3_BUCKET:-}" ]; then
-                echo "S3_BUCKET not configured, skipping S3 restore test"
-                exit 0
-              fi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: contract-state-backup
+  namespace: default
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: backup-sa
+          containers:
+          - name: contract-backup
+            image: node:20-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              npm install -g soroban-cli && \
+              cat /scripts/backup-contract-state.sh | bash
+            env:
+            - name: CONTRACT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: contract-config
+                  key: contract-id
+            - name: SOROBAN_NETWORK
+              value: "testnet"
+            - name: S3_BACKUP_BUCKET
+              value: "scavenger-backups"
+            - name: AWS_REGION
+              value: "us-east-1"
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: backups
+              mountPath: /backups
+          volumes:
+          - name: scripts
+            configMap:
+              name: backup-scripts
+              defaultMode: 0755
+          - name: backups
+            emptyDir: {}
+          restartPolicy: OnFailure
 
-              LATEST=$(aws s3 ls "s3://${S3_BUCKET}/database/" | sort | tail -1 | awk '{print $4}')
-              if [ -z "$LATEST" ]; then
-                echo "No backups found in S3" >&2
-                exit 1
-              fi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-sa
+  namespace: default
 
-              aws s3 cp "s3://${S3_BUCKET}/database/${LATEST}" /tmp/latest_backup.sql.gz
-              gunzip -t /tmp/latest_backup.sql.gz && echo "Restore test passed: backup is valid"
-            resources:
-              requests:
-                memory: "256Mi"
-                cpu: "100m"
-              limits:
-                memory: "512Mi"
-                cpu: "500m"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backup-role
+  namespace: default
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+  resourceNames: ["postgres-credentials"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backup-rolebinding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backup-role
+subjects:
+- kind: ServiceAccount
+  name: backup-sa
+  namespace: default

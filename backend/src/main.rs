@@ -8,11 +8,11 @@ use actix_web::{web, App, HttpServer, HttpResponse};
 use services::{
     EmailService, SendGridEmailService, NotificationService, FirebaseNotificationService,
     ReportService, ReportingService, StorageService, S3StorageService,
-    WebhookManager, ExportService, AuditService,
+    WebhookManager, ExportService, AuditService, VerificationService, DefaultVerificationService,
 };
 use middleware::{RateLimitMiddleware, RateLimitConfig};
 use cache::Cache;
-use api::{contracts, ws, export, audit};
+use api::{contracts, ws, export, audit, verification};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter, prelude::*};
@@ -63,6 +63,7 @@ async fn main() -> std::io::Result<()> {
     let cache = Cache::new(300);
     let audit_service = AuditService::new();
     let ws_manager = ws::WsConnectionManager::new();
+    let verification_service: Arc<dyn VerificationService> = Arc::new(DefaultVerificationService::new());
 
     info!(
         cache_ttl = 300,
@@ -70,6 +71,7 @@ async fn main() -> std::io::Result<()> {
     );
     info!("Audit service initialized");
     info!("WebSocket manager initialized");
+    info!("Verification service initialized");
 
     HttpServer::new(move || {
         App::new()
@@ -81,6 +83,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(webhook_manager.clone()))
             .app_data(web::Data::new(cache.clone()))
             .app_data(web::Data::new(audit_service.clone()))
+            .app_data(web::Data::new(verification_service.clone()))
             .app_data(web::Data::new(ws_manager.clone()))
             // Health
             .route("/health", web::get().to(health_check))
@@ -115,6 +118,16 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/audit/retention", web::get().to(audit::get_retention_policy))
             .route("/api/v1/audit/retention", web::put().to(audit::update_retention_policy))
             .route("/api/v1/audit/purge", web::post().to(audit::purge_old_logs))
+            // Verification (Task 5)
+            .route("/api/v1/verification/start", web::post().to(verification::start_verification))
+            .route("/api/v1/verification/{participant_id}/status", web::get().to(verification::get_verification_status))
+            .route("/api/v1/verification/document", web::post().to(verification::submit_document))
+            .route("/api/v1/verification/document/{doc_id}/verify", web::post().to(verification::verify_document))
+            .route("/api/v1/verification/checklist", web::post().to(verification::submit_checklist))
+            .route("/api/v1/verification/pending-reviews", web::get().to(verification::get_pending_reviews))
+            .route("/api/v1/verification/approve", web::post().to(verification::approve_participant))
+            .route("/api/v1/verification/reject", web::post().to(verification::reject_participant))
+            .route("/api/v1/verification/{participant_id}/retry", web::post().to(verification::retry_verification))
     })
     .bind("0.0.0.0:8080")?
     .run()
