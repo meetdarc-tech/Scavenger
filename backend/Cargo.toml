@@ -37,6 +37,7 @@ actix-ws = "0.3"
 actix-web-actors = "4.2"
 rand = "0.8"
 hex = "0.4"
+actix-cors = "0.7"
 
 [dev-dependencies]
 mockall = "0.12"

@@ -5,12 +5,13 @@ mod cache;
 mod validation;
 
 use actix_web::{web, App, HttpServer, HttpResponse};
+use actix_cors::Cors;
 use services::{
     EmailService, SendGridEmailService, NotificationService, FirebaseNotificationService,
     ReportService, ReportingService, StorageService, S3StorageService,
     WebhookManager, ExportService, AuditService, VerificationService, DefaultVerificationService,
 };
-use middleware::{RateLimitMiddleware, RateLimitConfig};
+use middleware::{RateLimitMiddleware, RateLimitConfig, ValidationMiddleware, CsrfMiddleware};
 use cache::Cache;
 use api::{contracts, ws, export, audit, verification};
 use std::sync::Arc;
@@ -64,6 +65,9 @@ async fn main() -> std::io::Result<()> {
     let audit_service = AuditService::new();
     let ws_manager = ws::WsConnectionManager::new();
     let verification_service: Arc<dyn VerificationService> = Arc::new(DefaultVerificationService::new());
+    let csrf_secret = std::env::var("CSRF_SECRET").unwrap_or_else(|_| "change-me-in-production".to_string());
+    let allowed_origins = std::env::var("ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     info!(
         cache_ttl = 300,
@@ -74,8 +78,26 @@ async fn main() -> std::io::Result<()> {
     info!("Verification service initialized");
 
     HttpServer::new(move || {
+        let cors = {
+            let mut builder = Cors::default();
+            for origin in allowed_origins.split(',').map(str::trim) {
+                builder = builder.allowed_origin(origin);
+            }
+            builder
+                .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+                .allowed_headers(vec![
+                    actix_web::http::header::AUTHORIZATION,
+                    actix_web::http::header::CONTENT_TYPE,
+                    actix_web::http::header::HeaderName::from_static("x-csrf-token"),
+                    actix_web::http::header::HeaderName::from_static("x-session-id"),
+                ])
+                .max_age(3600)
+        };
+
         App::new()
+            .wrap(cors)
             .wrap(RateLimitMiddleware::new(rate_limit_config.clone()))
+            .wrap(ValidationMiddleware)
             .app_data(web::Data::new(email_service.clone()))
             .app_data(web::Data::new(notification_service.clone()))
             .app_data(web::Data::new(reporting_service.clone()))
