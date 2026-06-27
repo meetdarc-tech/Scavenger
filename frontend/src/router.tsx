@@ -119,6 +119,15 @@ const NotificationCenterPage = lazy(() =>
 const BatchUploadPage = lazy(() =>
   import('@/pages/BatchUploadPage').then((m) => ({ default: m.BatchUploadPage }))
 )
+const FeatureFlagsPage = lazy(() =>
+  import('@/pages/FeatureFlagsPage').then((m) => ({ default: m.FeatureFlagsPage }))
+)
+const PlatformHealthDashboardPage = lazy(() =>
+  import('@/pages/PlatformHealthDashboardPage').then((m) => ({ default: m.PlatformHealthDashboardPage }))
+)
+const PerformanceSLAsPage = lazy(() =>
+  import('@/pages/PerformanceSLAsPage').then((m) => ({ default: m.PerformanceSLAsPage }))
+)
 
 // eslint-disable-next-line react-refresh/only-export-components
 function PageFallback() {
@@ -184,7 +193,10 @@ export const router = createBrowserRouter([
       { path: 'test-reports', element: <TestReportsPage /> },
       { path: 'compliance-reports', element: <ComplianceReportsPage /> },
       { path: 'notifications', element: <NotificationCenterPage /> },
-      { path: 'batch-upload', element: <BatchUploadPage /> }
+      { path: 'batch-upload', element: <BatchUploadPage /> },
+      { path: 'feature-flags', element: <FeatureFlagsPage /> },
+      { path: 'health', element: <PlatformHealthDashboardPage /> },
+      { path: 'slas', element: <PerformanceSLAsPage /> }
     ]
   },
   { path: '*', element: <NotFoundPage /> }
