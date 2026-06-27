@@ -1,12 +1,31 @@
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-    Error, HttpMessage, HttpResponse,
+    Error,
 };
 use futures::future::LocalBoxFuture;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Rate limiting tier — determines request quotas.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RateLimitTier {
+    Anonymous,
+    Free,
+    Premium,
+    Admin,
+}
+
+impl RateLimitTier {
+    pub fn config(&self) -> RateLimitConfig {
+        match self {
+            RateLimitTier::Anonymous => RateLimitConfig { requests_per_minute: 30, requests_per_hour: 200 },
+            RateLimitTier::Free      => RateLimitConfig { requests_per_minute: 60, requests_per_hour: 1000 },
+            RateLimitTier::Premium   => RateLimitConfig { requests_per_minute: 300, requests_per_hour: 5000 },
+            RateLimitTier::Admin     => RateLimitConfig { requests_per_minute: 1000, requests_per_hour: 50000 },
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct RateLimitConfig {
@@ -16,21 +35,27 @@ pub struct RateLimitConfig {
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
-        Self {
-            requests_per_minute: 60,
-            requests_per_hour: 1000,
-        }
+        RateLimitTier::Free.config()
     }
 }
 
-pub struct RateLimitMiddleware {
-    config: RateLimitConfig,
-    state: Arc<Mutex<RateLimitState>>,
+/// Atomic counters for observability.
+#[derive(Debug, Default, Clone)]
+pub struct RateLimitMetrics {
+    pub total_requests: u64,
+    pub rate_limited_requests: u64,
+    pub by_tier: HashMap<String, u64>,
 }
 
 struct RateLimitState {
     minute_buckets: HashMap<String, Vec<Instant>>,
     hour_buckets: HashMap<String, Vec<Instant>>,
+    metrics: RateLimitMetrics,
+}
+
+pub struct RateLimitMiddleware {
+    config: RateLimitConfig,
+    state: Arc<Mutex<RateLimitState>>,
 }
 
 impl RateLimitMiddleware {
@@ -40,8 +65,13 @@ impl RateLimitMiddleware {
             state: Arc::new(Mutex::new(RateLimitState {
                 minute_buckets: HashMap::new(),
                 hour_buckets: HashMap::new(),
+                metrics: RateLimitMetrics::default(),
             })),
         }
+    }
+
+    pub fn metrics(&self) -> RateLimitMetrics {
+        self.state.lock().unwrap().metrics.clone()
     }
 }
 
@@ -94,61 +124,69 @@ where
         let config = self.config.clone();
         let state = self.state.clone();
 
-        let mut state_guard = state.lock().unwrap();
+        let mut s = state.lock().unwrap();
+        s.metrics.total_requests += 1;
         let now = Instant::now();
 
-        // Check minute limit
+        // Sliding window — minute
         let minute_key = format!("{}:minute", client_ip);
-        let minute_requests = state_guard
-            .minute_buckets
-            .entry(minute_key.clone())
-            .or_insert_with(Vec::new);
+        let min_reqs = s.minute_buckets.entry(minute_key).or_default();
+        min_reqs.retain(|t| now.duration_since(*t) < Duration::from_secs(60));
+        let min_count = min_reqs.len();
 
-        minute_requests.retain(|t| now.duration_since(*t) < Duration::from_secs(60));
-
-        if minute_requests.len() >= config.requests_per_minute as usize {
-            drop(state_guard);
+        if min_count >= config.requests_per_minute as usize {
+            s.metrics.rate_limited_requests += 1;
+            drop(s);
             return Box::pin(async move {
                 Err(actix_web::error::ErrorTooManyRequests(
-                    "Rate limit exceeded: 60 requests per minute",
+                    "Rate limit exceeded: too many requests per minute",
                 ))
             });
         }
 
-        // Check hour limit
+        // Sliding window — hour
         let hour_key = format!("{}:hour", client_ip);
-        let hour_requests = state_guard
-            .hour_buckets
-            .entry(hour_key.clone())
-            .or_insert_with(Vec::new);
+        let hr_reqs = s.hour_buckets.entry(hour_key).or_default();
+        hr_reqs.retain(|t| now.duration_since(*t) < Duration::from_secs(3600));
+        let hr_count = hr_reqs.len();
 
-        hour_requests.retain(|t| now.duration_since(*t) < Duration::from_secs(3600));
-
-        if hour_requests.len() >= config.requests_per_hour as usize {
-            drop(state_guard);
+        if hr_count >= config.requests_per_hour as usize {
+            s.metrics.rate_limited_requests += 1;
+            drop(s);
             return Box::pin(async move {
                 Err(actix_web::error::ErrorTooManyRequests(
-                    "Rate limit exceeded: 1000 requests per hour",
+                    "Rate limit exceeded: too many requests per hour",
                 ))
             });
         }
 
-        minute_requests.push(now);
-        hour_requests.push(now);
-        drop(state_guard);
+        // Record this request
+        let min_key2 = format!("{}:minute", client_ip);
+        s.minute_buckets.entry(min_key2).or_default().push(now);
+        let hr_key2 = format!("{}:hour", client_ip);
+        s.hour_buckets.entry(hr_key2).or_default().push(now);
+        let remaining_min = config.requests_per_minute as usize - min_count - 1;
+        let remaining_hr  = config.requests_per_hour  as usize - hr_count  - 1;
+        drop(s);
+
+        let rpm = config.requests_per_minute.to_string();
+        let rph = config.requests_per_hour.to_string();
 
         let service = self.service.clone();
         Box::pin(async move {
             let res = service.call(req).await?;
             let mut response = res;
-            response.headers_mut().insert(
-                actix_web::http::header::HeaderName::from_static("x-ratelimit-limit-minute"),
-                actix_web::http::header::HeaderValue::from_static("60"),
-            );
-            response.headers_mut().insert(
-                actix_web::http::header::HeaderName::from_static("x-ratelimit-limit-hour"),
-                actix_web::http::header::HeaderValue::from_static("1000"),
-            );
+            let h = response.headers_mut();
+            use actix_web::http::header::{HeaderName, HeaderValue};
+            let insert = |h: &mut actix_web::http::header::HeaderMap, k: &'static str, v: String| {
+                if let (Ok(name), Ok(val)) = (HeaderName::from_static(k), HeaderValue::from_str(&v)) {
+                    h.insert(name, val);
+                }
+            };
+            insert(h, "x-ratelimit-limit-minute", rpm);
+            insert(h, "x-ratelimit-limit-hour", rph);
+            insert(h, "x-ratelimit-remaining-minute", remaining_min.to_string());
+            insert(h, "x-ratelimit-remaining-hour",   remaining_hr.to_string());
             Ok(response)
         })
     }
