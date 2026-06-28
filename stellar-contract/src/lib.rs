@@ -22,6 +22,16 @@ pub mod incentive;
 /// On-chain aggregation helpers for stats and metrics.
 pub mod contract_analytics;
 
+// ── Issues #814–#817: new utility modules ────────────────────────────────────
+/// #814 — Reusable event builder pattern, filtering, and formatting utilities.
+pub mod event_builder;
+/// #815 — Type size analysis, packed flags, coordinate compression, and validation.
+pub mod type_utils;
+/// #816 — Hash-based commitment scheme for privacy-preserving (ZKP-style) operations.
+pub mod zkp;
+/// #817 — Versioned cryptographic key storage and rotation.
+pub mod key_rotation;
+
 // ── Internal test modules (compile-time only) ─────────────────────────────────
 mod test_expiration;
 mod test_grading;
