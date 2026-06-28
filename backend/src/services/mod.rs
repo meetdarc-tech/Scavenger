@@ -10,6 +10,10 @@ pub mod webhook;
 pub mod export;
 pub mod audit;
 pub mod analytics;
+pub mod notification_delivery;
+pub mod ml_classification;
+pub mod geospatial;
+pub mod contract_upgrades;
 
 pub use email::{EmailService, SendGridEmailService};
 pub use notifications::{NotificationService, FirebaseNotificationService};
