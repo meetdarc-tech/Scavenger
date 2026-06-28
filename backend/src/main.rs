@@ -2,6 +2,8 @@ mod services;
 mod middleware;
 mod api;
 mod cache;
+mod compliance;
+mod security;
 mod validation;
 
 use actix_web::{web, App, HttpServer, HttpResponse};
@@ -13,7 +15,7 @@ use services::{
 };
 use middleware::{RateLimitMiddleware, RateLimitConfig, ValidationMiddleware, CsrfMiddleware};
 use cache::Cache;
-use api::{contracts, ws, export, audit, verification};
+use api::{contracts, ws, export, audit, verification, compliance_api, signing_api};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter, prelude::*};
@@ -150,6 +152,24 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/verification/approve", web::post().to(verification::approve_participant))
             .route("/api/v1/verification/reject", web::post().to(verification::reject_participant))
             .route("/api/v1/verification/{participant_id}/retry", web::post().to(verification::retry_verification))
+            // Compliance Monitoring (Task 6)
+            .route("/api/v1/compliance/checklists", web::get().to(compliance_api::list_checklists))
+            .route("/api/v1/compliance/checklists", web::post().to(compliance_api::create_checklist))
+            .route("/api/v1/compliance/check", web::post().to(compliance_api::run_compliance_check))
+            .route("/api/v1/compliance/alerts", web::get().to(compliance_api::list_compliance_alerts))
+            .route("/api/v1/compliance/alert-rules", web::post().to(compliance_api::create_alert_rule))
+            .route("/api/v1/compliance/alert-rules", web::get().to(compliance_api::list_alert_rules))
+            .route("/api/v1/compliance/audit-trail", web::get().to(compliance_api::get_audit_trail))
+            .route("/api/v1/compliance/report", web::post().to(compliance_api::generate_compliance_report))
+            // Transaction Signing (Task 7)
+            .route("/api/v1/signing/sign", web::post().to(signing_api::sign_transaction))
+            .route("/api/v1/signing/verify", web::post().to(signing_api::verify_signature))
+            .route("/api/v1/signing/multisig", web::post().to(signing_api::create_multisig))
+            .route("/api/v1/signing/multisig/sign", web::post().to(signing_api::multisig_sign))
+            .route("/api/v1/signing/revoke", web::post().to(signing_api::revoke_signature))
+            .route("/api/v1/signing/events", web::get().to(signing_api::list_events))
+            .route("/api/v1/signing/revocations", web::get().to(signing_api::list_revocations))
+            .route("/api/v1/signing/documentation", web::get().to(signing_api::get_documentation))
     })
     .bind("0.0.0.0:8080")?
     .run()
