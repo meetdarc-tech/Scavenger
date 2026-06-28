@@ -73,6 +73,61 @@ const WasteCertificationPage = lazy(() =>
 const RecyclingGuidePage = lazy(() =>
   import('@/pages/RecyclingGuidePage').then((m) => ({ default: m.RecyclingGuidePage }))
 )
+const PerformanceMonitoringPage = lazy(() =>
+  import('@/pages/PerformanceMonitoringPage').then((m) => ({ default: m.PerformanceMonitoringPage }))
+)
+const GamificationPage = lazy(() =>
+  import('@/pages/GamificationPage').then((m) => ({ default: m.GamificationPage }))
+)
+const OfflinePage = lazy(() =>
+  import('@/pages/OfflinePage').then((m) => ({ default: m.OfflinePage }))
+)
+const WasteHistoryPage = lazy(() =>
+  import('@/pages/WasteHistoryPage').then((m) => ({ default: m.WasteHistoryPage }))
+)
+const ParticipantSearchPage = lazy(() =>
+  import('@/pages/ParticipantSearchPage').then((m) => ({ default: m.ParticipantSearchPage }))
+)
+const WasteStatisticsPage = lazy(() =>
+  import('@/pages/WasteStatisticsPage').then((m) => ({ default: m.WasteStatisticsPage }))
+)
+const RewardTrackingPage = lazy(() =>
+  import('@/pages/RewardTrackingPage').then((m) => ({ default: m.RewardTrackingPage }))
+)
+const MaterialTransferPage = lazy(() =>
+  import('@/pages/MaterialTransferPage').then((m) => ({ default: m.MaterialTransferPage }))
+)
+const WasteVerificationDashboardPage = lazy(() =>
+  import('@/pages/WasteVerificationDashboardPage').then((m) => ({
+    default: m.WasteVerificationDashboardPage
+  }))
+)
+const ParticipantRegistrationPage = lazy(() =>
+  import('@/pages/ParticipantRegistrationPage').then((m) => ({
+    default: m.ParticipantRegistrationPage
+  }))
+)
+const TestReportsPage = lazy(() =>
+  import('@/pages/TestReportsPage').then((m) => ({ default: m.TestReportsPage }))
+)
+const ComplianceReportsPage = lazy(() =>
+  import('@/pages/ComplianceReportsPage').then((m) => ({ default: m.ComplianceReportsPage }))
+)
+const NotificationCenterPage = lazy(() =>
+  import('@/pages/NotificationCenterPage').then((m) => ({ default: m.NotificationCenterPage }))
+)
+const BatchUploadPage = lazy(() =>
+  import('@/pages/BatchUploadPage').then((m) => ({ default: m.BatchUploadPage }))
+)
+const FeatureFlagsPage = lazy(() =>
+  import('@/pages/FeatureFlagsPage').then((m) => ({ default: m.FeatureFlagsPage }))
+)
+const PlatformHealthDashboardPage = lazy(() =>
+  import('@/pages/PlatformHealthDashboardPage').then((m) => ({ default: m.PlatformHealthDashboardPage }))
+)
+const PerformanceSLAsPage = lazy(() =>
+  import('@/pages/PerformanceSLAsPage').then((m) => ({ default: m.PerformanceSLAsPage }))
+)
 
 // eslint-disable-next-line react-refresh/only-export-components
 function PageFallback() {
@@ -106,7 +161,7 @@ export const router = createBrowserRouter([
       { path: 'submit', element: <div>Submit Waste</div> },
       { path: 'collect', element: <CollectorDashboardPage /> },
       { path: 'incentives', element: <IncentivesMarketplacePage /> },
-      { path: 'transfer', element: <div>Transfer</div> },
+      { path: 'transfer', element: <MaterialTransferPage /> },
       { path: 'history', element: <div>History</div> },
       { path: 'dashboard/recycler', element: <RecyclerDashboard /> },
       { path: 'wastes', element: <WasteListPage /> },
@@ -125,7 +180,23 @@ export const router = createBrowserRouter([
       { path: 'predictions', element: <PredictiveAnalyticsPage /> },
       { path: 'marketplace', element: <WasteMarketplacePage /> },
       { path: 'certifications', element: <WasteCertificationPage /> },
-      { path: 'recycling-guide', element: <RecyclingGuidePage /> }
+      { path: 'recycling-guide', element: <RecyclingGuidePage /> },
+      { path: 'performance', element: <PerformanceMonitoringPage /> },
+      { path: 'achievements', element: <GamificationPage /> },
+      { path: 'offline', element: <OfflinePage /> },
+      { path: 'waste-history', element: <WasteHistoryPage /> },
+      { path: 'participant-search', element: <ParticipantSearchPage /> },
+      { path: 'waste-statistics', element: <WasteStatisticsPage /> },
+      { path: 'reward-tracking', element: <RewardTrackingPage /> },
+      { path: 'verification-dashboard', element: <WasteVerificationDashboardPage /> },
+      { path: 'register', element: <ParticipantRegistrationPage /> },
+      { path: 'test-reports', element: <TestReportsPage /> },
+      { path: 'compliance-reports', element: <ComplianceReportsPage /> },
+      { path: 'notifications', element: <NotificationCenterPage /> },
+      { path: 'batch-upload', element: <BatchUploadPage /> },
+      { path: 'feature-flags', element: <FeatureFlagsPage /> },
+      { path: 'health', element: <PlatformHealthDashboardPage /> },
+      { path: 'slas', element: <PerformanceSLAsPage /> }
     ]
   },
   { path: '*', element: <NotFoundPage /> }

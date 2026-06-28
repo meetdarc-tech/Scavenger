@@ -24,7 +24,7 @@ export function WasteSelectionStep({ formData, setValue }: WasteSelectionStepPro
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Select Waste Items</h2>
+      <h2 className="text-xl font-semibold">Select Waste</h2>
       <p className="text-sm text-muted-foreground">
         Choose one or more waste items to transfer
       </p>

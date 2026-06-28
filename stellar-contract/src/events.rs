@@ -1,6 +1,6 @@
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-use crate::types::{ParticipantRole, WasteGrade, WasteType, CertificationLevel};
+use crate::types::{ParticipantRole, WasteGrade, WasteType, CertificationLevel, ParticipantTier};
 
 const WASTE_REGISTERED: Symbol = symbol_short!("recycled");
 const DONATION_MADE: Symbol = symbol_short!("donated");
@@ -159,6 +159,19 @@ pub fn emit_certification_granted(env: &Env, participant: &Address, level: Certi
         .publish((CERTIFICATION_GRANTED, participant), level.to_u32());
 }
 
+/// Emit event when a participant's tier changes
+pub fn emit_participant_tier_changed(
+    env: &Env,
+    participant: &Address,
+    old_tier: ParticipantTier,
+    new_tier: ParticipantTier,
+) {
+    env.events().publish(
+        (symbol_short!("tier_upd"), participant),
+        (old_tier as u32, new_tier as u32),
+    );
+}
+
 /// Emit event when an auction is created
 pub fn emit_auction_created(env: &Env, auction_id: u64, waste_id: u128, creator: &Address, start_price: u128, end_time: u64) {
     env.events()
@@ -217,4 +230,170 @@ pub fn emit_incentive_scheduled(
 pub fn emit_goal_achieved(env: &Env, participant: &Address, target_weight: u128) {
     env.events()
         .publish((symbol_short!("goal_ach"), participant), target_weight);
+}
+
+pub fn emit_carbon_credits_redeemed(
+    env: &Env,
+    participant: &Address,
+    amount: u128,
+    remaining: u128,
+) {
+    env.events()
+        .publish((symbol_short!("carb_rdm"), participant), (amount, remaining));
+}
+
+pub fn emit_carbon_listing_created(
+    env: &Env,
+    listing_id: u64,
+    seller: &Address,
+    amount: u128,
+    price_per_credit: i128,
+) {
+    env.events()
+        .publish((symbol_short!("carb_lst"), listing_id), (seller, amount, price_per_credit));
+}
+
+pub fn emit_carbon_listing_cancelled(env: &Env, listing_id: u64, seller: &Address) {
+    env.events()
+        .publish((symbol_short!("carb_cnc"), listing_id), seller);
+}
+
+pub fn emit_carbon_listing_purchased(
+    env: &Env,
+    listing_id: u64,
+    seller: &Address,
+    buyer: &Address,
+    amount: u128,
+    total_price: i128,
+) {
+    env.events()
+        .publish((symbol_short!("carb_buy"), listing_id), (seller, buyer, amount, total_price));
+}
+
+// ============ Verification Workflow Events (Issue #653) ============
+
+pub fn emit_verification_started(
+    env: &Env,
+    waste_id: u128,
+    verification_id: u64,
+    verifier: &Address,
+) {
+    env.events()
+        .publish((symbol_short!("ver_start"), verification_id), (waste_id, verifier));
+}
+
+pub fn emit_verification_completed(
+    env: &Env,
+    waste_id: u128,
+    verification_id: u64,
+    quality_score: u32,
+) {
+    env.events()
+        .publish((symbol_short!("ver_comp"), verification_id), (waste_id, quality_score));
+}
+
+pub fn emit_verification_failed(env: &Env, waste_id: u128, verification_id: u64) {
+    env.events()
+        .publish((symbol_short!("ver_fail"), verification_id), waste_id);
+}
+
+pub fn emit_verification_expired(env: &Env, waste_id: u128, verification_id: u64) {
+    env.events()
+        .publish((symbol_short!("ver_exp"), verification_id), waste_id);
+}
+
+// ============ Upgrade System Events (Issue #652) ============
+
+pub fn emit_upgrade_proposed(env: &Env, proposal_id: u64, new_implementation: &Address) {
+    env.events()
+        .publish((symbol_short!("upg_prop"), proposal_id), new_implementation);
+}
+
+pub fn emit_upgrade_approved(env: &Env, proposal_id: u64) {
+    env.events()
+        .publish((symbol_short!("upg_app"), proposal_id), ());
+}
+
+pub fn emit_upgrade_executed(env: &Env, proposal_id: u64, version: u32) {
+    env.events()
+        .publish((symbol_short!("upg_exec"), proposal_id), version);
+}
+
+pub fn emit_upgrade_rejected(env: &Env, proposal_id: u64) {
+    env.events()
+        .publish((symbol_short!("upg_rej"), proposal_id), ());
+}
+
+// ============ Blockchain Explorer Events (Issue #651) ============
+
+pub fn emit_transaction_tracked(env: &Env, tx_id: u64, tx_hash: &String) {
+    env.events()
+        .publish((symbol_short!("tx_track"), tx_id), tx_hash);
+}
+
+pub fn emit_transaction_status_updated(
+    env: &Env,
+    tx_id: u64,
+    status: crate::explorer::TransactionStatus,
+) {
+    env.events()
+        .publish((symbol_short!("tx_stat"), tx_id), status.to_u32());
+}
+
+// ============ Advanced Analytics Events (Issue #650) ============
+
+pub fn emit_analytics_report_created(
+    env: &Env,
+    report_id: u64,
+    report_type: crate::analytics::ReportType,
+) {
+    env.events()
+        .publish((symbol_short!("ana_rep"), report_id), report_type.to_u32());
+}
+
+pub fn emit_custom_query_created(env: &Env, query_id: u64) {
+    env.events()
+        .publish((symbol_short!("qry_cre"), query_id), ());
+}
+
+pub fn emit_custom_query_executed(env: &Env, query_id: u64) {
+    env.events()
+        .publish((symbol_short!("qry_exe"), query_id), ());
+}
+
+// ============ RBAC Events (#704) ============
+
+pub fn emit_permission_granted(
+    env: &Env,
+    subject: &Address,
+    permission: u32,
+    granted_by: &Address,
+) {
+    env.events()
+        .publish((symbol_short!("perm_gr"), subject), (permission, granted_by));
+}
+
+pub fn emit_permission_revoked(
+    env: &Env,
+    subject: &Address,
+    permission: u32,
+    revoked_by: &Address,
+) {
+    env.events()
+        .publish((symbol_short!("perm_rv"), subject), (permission, revoked_by));
+}
+
+// ============ Reconciliation Events (#706) ============
+
+pub fn emit_waste_reconciled(
+    env: &Env,
+    waste_id: u128,
+    original_weight: u128,
+    adjusted_weight: u128,
+    reconciled_by: &Address,
+) {
+    env.events().publish(
+        (symbol_short!("reconcil"), waste_id),
+        (original_weight, adjusted_weight, reconciled_by),
+    );
 }

@@ -19,10 +19,19 @@ import {
   ShoppingBag,
   Award,
   BookOpen,
+  CalendarDays,
+  Heart,
+  TrendingUp,
+  Trophy,
+  WifiOff,
+  Bell,
+  Upload,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { useWallet } from '@/context/WalletContext'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/Button'
+import { NotificationBell } from '@/components/ui/NotificationBell'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { SearchBar } from '@/components/ui/SearchBar'
 import { OfflineIndicator } from '@/components/OfflineIndicator'
@@ -92,6 +101,48 @@ const NAV_LINKS = [
     href: '/recycling-guide',
     roles: ['Recycler', 'Collector', 'Manufacturer'],
     icon: BookOpen
+  },
+  {
+    label: 'Subscriptions',
+    href: '/subscriptions',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: CalendarDays
+  },
+  {
+    label: 'Donations',
+    href: '/donations',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: Heart
+  },
+  {
+    label: 'Predictions',
+    href: '/predictions',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: TrendingUp
+  },
+  {
+    label: 'Achievements',
+    href: '/achievements',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: Trophy
+  },
+  {
+    label: 'Notifications',
+    href: '/notifications',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: Bell
+  },
+  {
+    label: 'Batch Upload',
+    href: '/batch-upload',
+    roles: ['Recycler', 'Collector'],
+    icon: Upload
+  },
+  {
+    label: 'Offline',
+    href: '/offline',
+    roles: ['Recycler', 'Collector', 'Manufacturer'],
+    icon: WifiOff
   }
 ]
 
@@ -115,6 +166,13 @@ function getOnboardingDataAttribute(href: string): string | undefined {
     '/marketplace': 'marketplace',
     '/certifications': 'certifications',
     '/recycling-guide': 'recycling-guide',
+    '/subscriptions': 'subscriptions',
+    '/donations': 'donations',
+    '/predictions': 'predictions',
+    '/achievements': 'achievements',
+    '/notifications': 'notifications',
+    '/batch-upload': 'batch-upload',
+    '/offline': 'offline',
   }
   return attributeMap[href]
 }
