@@ -14,6 +14,8 @@ pub mod notification_delivery;
 pub mod ml_classification;
 pub mod geospatial;
 pub mod contract_upgrades;
+pub mod encryption;
+pub mod encryption_verification;
 
 pub use email::{EmailService, SendGridEmailService};
 pub use notifications::{NotificationService, FirebaseNotificationService};
@@ -27,3 +29,5 @@ pub use webhook::{WebhookManager, WebhookEvent, Webhook};
 pub use export::{ExportService, ExportFormat, ExportData};
 pub use audit::{AuditService, AuditEntry, AuditEventType, AuditAction, AuditQuery};
 pub use analytics::{AnalyticsService, Metric, ParticipantAnalytics, GlobalAnalytics, AnomalyFlag};
+pub use encryption::{DataEncryptionService, EncryptionKey, EncryptedData, EncryptionMetrics};
+pub use encryption_verification::EncryptionMonitoringService;
